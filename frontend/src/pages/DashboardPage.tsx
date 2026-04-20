@@ -1,0 +1,592 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  format,
+  addDays,
+  eachDayOfInterval,
+  isWeekend,
+  isSameDay,
+  parseISO,
+  startOfToday,
+  isAfter,
+  isBefore,
+  addWeeks,
+} from 'date-fns';
+import {
+  Plus,
+  Download,
+  Search,
+  User,
+  Settings,
+  X,
+  LogOut,
+  AlertTriangle,
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+import { AbsenceType, BalanceResponse } from '../types';
+import { CATEGORY_COLORS } from '../constants';
+import { downloadCsv, toCsv } from '../lib/csv-export';
+import { useData } from '../lib/data-context';
+import { useAuth } from '../lib/auth-context';
+import { api, ApiError } from '../lib/api';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+export default function DashboardPage() {
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const {
+    loading,
+    error,
+    employees,
+    departments,
+    absences,
+    config,
+    upsertAbsence,
+  } = useData();
+
+  const [selectedDept, setSelectedDept] = useState<string>('All');
+  const [selectedType, setSelectedType] = useState<AbsenceType | 'All'>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [balance, setBalance] = useState<BalanceResponse | null>(null);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+
+  const today = startOfToday();
+  const todayStr = format(today, 'yyyy-MM-dd');
+
+  const calendarDays = useMemo(() => {
+    return eachDayOfInterval({
+      start: addWeeks(today, -2),
+      end: addDays(today, 60),
+    });
+  }, [today]);
+
+  const filteredEmployees = useMemo(() => {
+    return employees.filter((emp) => {
+      const matchDept = selectedDept === 'All' || emp.department === selectedDept;
+      const matchSearch =
+        emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        emp.manager.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchDept && matchSearch;
+    });
+  }, [employees, selectedDept, searchQuery]);
+
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.id === selectedEmployeeId) ?? null,
+    [employees, selectedEmployeeId],
+  );
+
+  useEffect(() => {
+    if (!selectedEmployeeId) {
+      setBalance(null);
+      setBalanceError(null);
+      return;
+    }
+    let cancelled = false;
+    setBalanceError(null);
+    api
+      .getBalance(selectedEmployeeId, todayStr)
+      .then((b) => {
+        if (!cancelled) setBalance(b);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBalance(null);
+        setBalanceError(
+          err instanceof ApiError ? err.message : 'Failed to load balance',
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEmployeeId, todayStr, absences]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      const todayCell = scrollRef.current.querySelector('[data-today="true"]');
+      if (todayCell) {
+        todayCell.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+      }
+    }
+  }, [employees.length]);
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
+
+  const handleToggle = (employeeId: string, date: string, type: AbsenceType) => {
+    void upsertAbsence(employeeId, date, type).catch((err) => {
+      console.error(err);
+      alert(err instanceof ApiError ? err.message : 'Failed to update absence');
+    });
+  };
+
+  const handleExport = () => {
+    const employeeIds = new Set(filteredEmployees.map((e) => e.id));
+    const empById = new Map<string, (typeof filteredEmployees)[number]>(
+      filteredEmployees.map((e) => [e.id, e]),
+    );
+    const rangeStart = calendarDays[0];
+    const rangeEnd = calendarDays[calendarDays.length - 1];
+
+    const rows = absences
+      .filter((a) => {
+        if (!employeeIds.has(a.employeeId)) return false;
+        if (selectedType !== 'All' && a.type !== selectedType) return false;
+        const d = parseISO(a.date);
+        if (isBefore(d, rangeStart) || isAfter(d, rangeEnd)) return false;
+        return true;
+      })
+      .map((a) => {
+        const emp = empById.get(a.employeeId);
+        if (!emp) return null;
+        const d = parseISO(a.date);
+        return {
+          employee: emp.name,
+          department: emp.department,
+          manager: emp.manager,
+          date: a.date,
+          dayOfWeek: format(d, 'EEEE'),
+          type: a.type,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((a, b) =>
+        a.employee === b.employee
+          ? a.date.localeCompare(b.date)
+          : a.employee.localeCompare(b.employee),
+      );
+
+    const csv = toCsv(rows, [
+      { key: 'employee', header: 'Employee' },
+      { key: 'department', header: 'Department' },
+      { key: 'manager', header: 'Manager' },
+      { key: 'date', header: 'Date' },
+      { key: 'dayOfWeek', header: 'Day Of Week' },
+      { key: 'type', header: 'Type' },
+    ]);
+
+    const filename = `absences_${selectedDept}_${selectedType}_${todayStr}.csv`;
+    downloadCsv(filename, csv);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F1F5F9] text-slate-400 text-xs uppercase tracking-widest font-bold">
+        Loading data...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#F1F5F9] gap-4">
+        <AlertTriangle className="w-8 h-8 text-red-500" />
+        <p className="text-sm font-bold text-slate-700">{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen bg-[#F1F5F9] text-[#1E293B] font-sans overflow-hidden p-6 gap-6">
+      <aside className="w-64 flex flex-col z-20 shrink-0">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col overflow-hidden">
+          <div className="p-5 border-b border-slate-100">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-slate-900 rounded flex items-center justify-center text-white font-bold shrink-0">
+                FH
+              </div>
+              <div>
+                <h1 className="font-bold text-sm tracking-tight text-slate-900 leading-tight">
+                  Absence Tracker
+                </h1>
+                <p className="text-[10px] font-mono text-slate-500">VER 1.0.4</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search staff..."
+                  className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all font-medium"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <p className="text-[9px] uppercase tracking-wider font-bold text-slate-400 px-2 mb-1">
+                  Departments
+                </p>
+                <div className="space-y-0.5 overflow-y-auto max-h-[300px] pr-1">
+                  {['All', ...departments.map((d) => d.name)].map((dept) => (
+                    <button
+                      key={dept}
+                      onClick={() => setSelectedDept(dept)}
+                      className={cn(
+                        'w-full text-left px-2 py-1.5 rounded-lg text-xs font-semibold transition-all',
+                        selectedDept === dept
+                          ? 'bg-slate-900 text-white shadow-md shadow-slate-200'
+                          : 'hover:bg-slate-50 text-slate-600',
+                      )}
+                    >
+                      {dept}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-auto p-5 border-t border-slate-100 bg-slate-50/50">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shadow-sm">
+                <User className="w-4 h-4 text-slate-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold truncate">{user?.name ?? 'User'}</p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handleLogout}
+                    className="text-[10px] text-slate-400 font-medium hover:text-red-500 flex items-center gap-1"
+                  >
+                    <LogOut className="w-2 h-2" /> Logout
+                  </button>
+                </div>
+              </div>
+              {user?.role === 'ADMIN' ? (
+                <button
+                  type="button"
+                  onClick={() => navigate('/settings')}
+                  className="p-1 hover:bg-slate-200 rounded-md ml-auto"
+                >
+                  <Settings className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-600 transition-colors" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main className="flex-1 flex flex-col min-w-0 gap-6">
+        <header className="flex items-start justify-between z-10 shrink-0 h-14">
+          <div className="flex gap-10">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                Consolidated Schedule
+              </h2>
+              <p className="text-xs text-slate-500 font-mono mt-0.5 uppercase tracking-wide">
+                FIN-{format(today, 'yyyy')}-ABS-1.0
+              </p>
+            </div>
+
+            <div className="flex gap-8 border-l border-slate-200 pl-8 items-center">
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                  Today
+                </span>
+                <span className="text-sm font-mono font-bold text-slate-700">
+                  {format(today, 'dd MMM yyyy').toUpperCase()}
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                  Working Year
+                </span>
+                <span className="text-sm font-mono font-bold text-slate-700">
+                  FY{format(today, 'yy')}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex bg-white border border-slate-200 p-1 rounded-lg shadow-sm">
+              {(['VACATION', 'HOLIDAY', 'SICK'] as AbsenceType[]).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setSelectedType(type === selectedType ? 'All' : type)}
+                  className={cn(
+                    'px-3 py-1 rounded-md text-[10px] font-bold transition-all flex items-center gap-2',
+                    selectedType === type
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-500 hover:bg-slate-50',
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'w-2 h-2 rounded-sm',
+                      type === 'VACATION'
+                        ? 'bg-green-500'
+                        : type === 'HOLIDAY'
+                          ? 'bg-blue-500'
+                          : 'bg-red-500',
+                    )}
+                  />
+                  {type}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors shadow-sm"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export
+            </button>
+          </div>
+        </header>
+
+        <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col mt-2">
+          <div className="flex-1 overflow-auto relative scroll-smooth bg-white" ref={scrollRef}>
+            <div className="inline-block min-w-full">
+              <table className="border-separate border-spacing-0 table-fixed w-full">
+                <thead>
+                  <tr className="bg-slate-50/80 backdrop-blur-sm sticky top-0 z-40">
+                    <th className="sticky left-0 z-50 bg-slate-50 border-b border-r border-slate-200 w-56 p-0 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
+                      <div className="h-10 px-4 flex items-center text-[10px] uppercase tracking-wider font-bold text-slate-500">
+                        Employee &amp; Metrics
+                      </div>
+                    </th>
+                    {calendarDays.map((day) => {
+                      const isToday = isSameDay(day, today);
+                      const isSatSun = isWeekend(day);
+                      return (
+                        <th
+                          key={day.toISOString()}
+                          className={cn(
+                            'w-10 h-10 border-b border-r border-slate-200 font-normal p-0',
+                            isToday && 'bg-slate-900 text-white',
+                            isSatSun && !isToday && 'bg-slate-100 text-slate-400',
+                          )}
+                          data-today={isToday}
+                        >
+                          <div className="flex flex-col items-center justify-center h-full">
+                            <span className="text-[10px] font-bold">{format(day, 'd')}</span>
+                            <span className="text-[8px] uppercase font-medium opacity-70">
+                              {format(day, 'EEE')}
+                            </span>
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredEmployees.map((emp) => (
+                    <tr key={emp.id} className="group transition-colors text-xs">
+                      <td
+                        className={cn(
+                          'sticky left-0 z-30 border-b border-r border-slate-200 bg-white group-hover:bg-slate-50 transition-colors p-0 cursor-pointer overflow-hidden shadow-[2px_0_5px_rgba(0,0,0,0.02)]',
+                          selectedEmployeeId === emp.id && 'bg-blue-50/50',
+                        )}
+                        onClick={() =>
+                          setSelectedEmployeeId(emp.id === selectedEmployeeId ? null : emp.id)
+                        }
+                      >
+                        <div className="flex flex-col px-4 py-2.5">
+                          <span className="text-xs font-bold text-slate-900 leading-tight">
+                            {emp.name}
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono uppercase tracking-tighter mt-0.5">
+                            {emp.department} &bull; {emp.manager.split(' ')[0]}
+                          </span>
+                        </div>
+                        {selectedEmployeeId === emp.id && (
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
+                        )}
+                      </td>
+                      {calendarDays.map((day) => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const record = absences.find(
+                          (a) => a.employeeId === emp.id && a.date === dateStr,
+                        );
+                        const isSatSun = isWeekend(day);
+                        return (
+                          <td
+                            key={`${emp.id}-${dateStr}`}
+                            className={cn(
+                              'w-10 h-10 border-b border-r border-slate-100 p-0.5 relative group-hover:bg-slate-50/30 transition-colors',
+                              isSatSun && 'bg-slate-50/50',
+                            )}
+                            onClick={() => {
+                              if (!isSatSun) {
+                                const nextType = selectedType === 'All' ? 'VACATION' : selectedType;
+                                handleToggle(emp.id, dateStr, nextType as AbsenceType);
+                              }
+                            }}
+                          >
+                            <div className="w-full h-full cursor-pointer relative">
+                              {record && (
+                                <motion.div
+                                  layoutId={`${emp.id}-${dateStr}`}
+                                  className={cn(
+                                    'w-full h-full rounded shadow-sm border-l-4 flex items-center justify-center p-1',
+                                    CATEGORY_COLORS[record.type],
+                                  )}
+                                  initial={{ scale: 0.9, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                >
+                                  <span className="text-[9px] font-mono font-bold leading-none">
+                                    {record.type[0]}
+                                  </span>
+                                </motion.div>
+                              )}
+                              {!record && !isSatSun && (
+                                <div className="w-full h-full opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
+                                  <div className="w-4 h-4 rounded bg-slate-100 flex items-center justify-center text-slate-300">
+                                    <Plus className="w-2 h-2" />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <AnimatePresence>
+          {selectedEmployee && balance && (
+            <motion.div
+              initial={{ y: 200, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 200, opacity: 0 }}
+              className="grid grid-cols-4 gap-4 z-30 shrink-0"
+            >
+              <div className="bg-slate-900 rounded-xl p-4 text-white shadow-lg flex flex-col justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center font-bold text-lg">
+                    {selectedEmployee.name[0]}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold truncate">{selectedEmployee.name}</h3>
+                    <p className="text-[10px] text-slate-400 font-mono">
+                      {selectedEmployee.department.toUpperCase()}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-end">
+                  <div>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">
+                      Start Date
+                    </p>
+                    <p className="text-xs font-mono">
+                      {format(parseISO(selectedEmployee.startDate), 'dd.MM.yyyy')}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedEmployeeId(null)}
+                    className="p-1 hover:bg-white/10 rounded transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between hover:border-green-200 transition-colors">
+                <div className="text-[10px] uppercase text-slate-500 font-bold tracking-wider mb-2 flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                  Vacation Balance
+                </div>
+                <div className="flex justify-between items-end">
+                  <div className="text-3xl font-mono font-bold text-green-600">
+                    {balance.vacation.balanceToday}
+                    <span className="text-sm font-normal text-slate-400 ml-1">
+                      / {balance.vacation.accruedYear}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] text-slate-400 uppercase font-bold tracking-tight leading-none mb-1">
+                      Used YTD
+                    </div>
+                    <div className="text-xs font-mono font-bold text-slate-700">
+                      {balance.vacation.used}.0 d
+                    </div>
+                    {balance.vacation.carryIn > 0 && (
+                      <div className="text-[9px] text-slate-400 mt-1">
+                        Carry in {balance.vacation.carryIn}d
+                        {balance.vacation.carryInForfeited > 0 &&
+                          ` (forfeited ${balance.vacation.carryInForfeited}d)`}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between hover:border-blue-200 transition-colors">
+                <div className="text-[10px] uppercase text-slate-500 font-bold tracking-wider mb-2 flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  Holiday Balance
+                </div>
+                <div className="flex justify-between items-end">
+                  <div className="text-3xl font-mono font-bold text-blue-600">
+                    {balance.holiday.balanceToday}
+                    <span className="text-sm font-normal text-slate-400 ml-1">
+                      / {balance.holiday.accruedYear}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] text-slate-400 uppercase font-bold tracking-tight leading-none mb-1">
+                      Quota
+                    </div>
+                    <div className="text-xs font-mono font-bold text-slate-700">
+                      {config.holidayQuota}.0 d
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-col justify-between hover:border-red-200 transition-colors">
+                <div className="text-[10px] uppercase text-slate-500 font-bold tracking-wider mb-2 flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                  Sick Days Total
+                </div>
+                <div className="flex justify-between items-end">
+                  <div className="text-3xl font-mono font-bold text-red-600">
+                    {balance.sick.used}
+                    <span className="text-xs font-normal text-slate-400 ml-1">Days</span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] text-slate-400 uppercase font-bold tracking-tight leading-none mb-1">
+                      Status
+                    </div>
+                    <div className="text-xs font-mono font-bold text-slate-700 uppercase">
+                      Tracked
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+          {selectedEmployee && balanceError && (
+            <motion.div
+              initial={{ y: 200, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 200, opacity: 0 }}
+              className="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-xs font-bold flex items-center gap-2 z-30 shrink-0"
+            >
+              <AlertTriangle className="w-4 h-4" /> {balanceError}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+    </div>
+  );
+}

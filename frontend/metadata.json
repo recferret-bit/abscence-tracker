@@ -1,0 +1,6 @@
+{
+  "name": "AbsenceTracker",
+  "description": "A professional vacation, holiday, and sick day tracker with automated accrual and carryover logic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

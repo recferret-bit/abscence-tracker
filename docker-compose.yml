@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-absence}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-absence}
+      POSTGRES_DB: ${POSTGRES_DB:-absence}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-absence} -d ${POSTGRES_DB:-absence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # backend:
+  #   build:
+  #     context: ./backend
+  #   restart: unless-stopped
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   environment:
+  #     DATABASE_URL: postgresql://${POSTGRES_USER:-absence}:${POSTGRES_PASSWORD:-absence}@db:5432/${POSTGRES_DB:-absence}?schema=public
+  #     JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+  #     JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-12h}
+  #     ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@finharbor.com}
+  #     ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+  #     ADMIN_NAME: ${ADMIN_NAME:-Admin User}
+  #     FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+  #     COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  #     PORT: "4000"
+  #   ports:
+  #     - "${BACKEND_PORT:-4000}:4000"
+
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - backend
+  #   ports:
+  #     - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  db_data:
