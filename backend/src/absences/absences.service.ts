@@ -4,8 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Absence, Prisma } from '../prisma/client';
+import { Absence, AbsenceType, Prisma } from '../prisma/client';
 
+import { computeBalance } from '../balance/balance.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAbsenceDto,
@@ -47,11 +48,21 @@ export class AbsencesService {
   async create(dto: CreateAbsenceDto): Promise<AbsenceDto> {
     const emp = await this.prisma.employee.findUnique({ where: { id: dto.employeeId } });
     if (!emp) throw new BadRequestException('Employee does not exist');
+
+    const newDate = this.parseDate(dto.date);
+    if (dto.type !== AbsenceType.SICK) {
+      const existing = await this.prisma.absence.findMany({
+        where: { employeeId: dto.employeeId },
+      });
+      const prospective = [...existing, { date: newDate, type: dto.type }] as Absence[];
+      await this.assertWithinQuota(dto.employeeId, prospective, [newDate]);
+    }
+
     try {
       const a = await this.prisma.absence.create({
         data: {
           employeeId: dto.employeeId,
-          date: this.parseDate(dto.date),
+          date: newDate,
           type: dto.type,
         },
       });
@@ -70,6 +81,19 @@ export class AbsencesService {
   }
 
   async update(id: string, dto: UpdateAbsenceDto): Promise<AbsenceDto> {
+    const target = await this.prisma.absence.findUnique({ where: { id } });
+    if (!target) throw new NotFoundException('Absence not found');
+
+    if (dto.type !== AbsenceType.SICK) {
+      const all = await this.prisma.absence.findMany({
+        where: { employeeId: target.employeeId },
+      });
+      const prospective = all.map((a) =>
+        a.id === id ? { ...a, type: dto.type } : a,
+      );
+      await this.assertWithinQuota(target.employeeId, prospective, [target.date]);
+    }
+
     try {
       const a = await this.prisma.absence.update({
         where: { id },
@@ -92,6 +116,48 @@ export class AbsencesService {
         throw new NotFoundException('Absence not found');
       }
       throw err;
+    }
+  }
+
+  private async assertWithinQuota(
+    employeeId: string,
+    prospective: Array<{ date: Date; type: AbsenceType }>,
+    affectedDates: Date[],
+  ): Promise<void> {
+    const employee = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    if (!employee) throw new BadRequestException('Employee does not exist');
+
+    let settings = await this.prisma.appSettings.findUnique({ where: { id: 1 } });
+    if (!settings) {
+      settings = await this.prisma.appSettings.create({ data: { id: 1 } });
+    }
+
+    const vacQuota = employee.vacationQuota ?? settings.vacationQuota;
+    const holQuota = employee.holidayQuota ?? settings.holidayQuota;
+
+    const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+    const years = new Set(affectedDates.map((d) => d.getUTCFullYear()));
+
+    for (const Y of years) {
+      const datesInYear = affectedDates.filter((d) => d.getUTCFullYear() === Y);
+      const latestInYear = new Date(Math.max(...datesInYear.map((d) => d.getTime())));
+      const asOf = new Date(Math.max(todayUtc.getTime(), latestInYear.getTime()));
+
+      const result = computeBalance({
+        startDate: employee.startDate,
+        asOf,
+        absences: prospective as Absence[],
+        vacationQuota: vacQuota,
+        holidayQuota: holQuota,
+        carryoverDeadline: settings.carryoverDeadline,
+      });
+
+      if (result.vacation.balanceToday < 0) {
+        throw new BadRequestException(`Vacation quota exceeded for ${Y}`);
+      }
+      if (result.holiday.balanceToday < 0) {
+        throw new BadRequestException(`Holiday quota exceeded for ${Y}`);
+      }
     }
   }
 

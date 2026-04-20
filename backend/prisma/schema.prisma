@@ -48,15 +48,17 @@ model Department {
 }
 
 model Employee {
-  id           String     @id @default(cuid())
-  name         String
-  departmentId String
-  department   Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  manager      String
-  startDate    DateTime   @db.Date
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  absences     Absence[]
+  id              String     @id @default(cuid())
+  name            String
+  departmentId    String
+  department      Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  manager         String
+  startDate       DateTime   @db.Date
+  vacationQuota   Int? // null = use AppSettings.vacationQuota
+  holidayQuota    Int? // null = use AppSettings.holidayQuota
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  absences        Absence[]
 
   @@index([departmentId])
 }

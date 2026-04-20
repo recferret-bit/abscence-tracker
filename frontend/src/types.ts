@@ -15,6 +15,10 @@ export interface Employee {
   departmentId: string;
   manager: string;
   startDate: string;      // ISO yyyy-mm-dd
+  /** null = use global AppSettings vacation quota */
+  vacationQuota: number | null;
+  /** null = use global AppSettings holiday quota */
+  holidayQuota: number | null;
 }
 
 export interface Department {

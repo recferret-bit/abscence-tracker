@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Users,
@@ -9,6 +9,8 @@ import {
   ArrowLeft,
   Briefcase,
   AlertCircle,
+  Search,
+  X,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -20,6 +22,17 @@ import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/** Empty string → inherit global default (null). Invalid input → error. */
+function parseOptionalAnnualQuota(
+  raw: string,
+): { ok: true; value: number | null } | { ok: false } {
+  const t = raw.trim();
+  if (t === '') return { ok: true, value: null };
+  const n = Number.parseInt(t, 10);
+  if (Number.isNaN(n) || n < 0) return { ok: false };
+  return { ok: true, value: n };
 }
 
 export default function SettingsPage() {
@@ -41,6 +54,10 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'personnel' | 'org'>('personnel');
   const [newDeptName, setNewDeptName] = useState('');
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
+  const [empVacQuotaEdit, setEmpVacQuotaEdit] = useState('');
+  const [empHolQuotaEdit, setEmpHolQuotaEdit] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
 
   // Local mirror of quotas so inputs aren't blocked by network round-trip
   const [vacationQuota, setVacationQuota] = useState<string>(String(config.vacationQuota));
@@ -109,19 +126,62 @@ export default function SettingsPage() {
     }
   };
 
+  const beginEditEmployee = (emp: Employee) => {
+    setEditingEmp(emp);
+    setEmpVacQuotaEdit(emp.vacationQuota === null ? '' : String(emp.vacationQuota));
+    setEmpHolQuotaEdit(emp.holidayQuota === null ? '' : String(emp.holidayQuota));
+  };
+
+  const cancelEditEmployee = () => {
+    setEditingEmp(null);
+    setEmpVacQuotaEdit('');
+    setEmpHolQuotaEdit('');
+  };
+
   const handleSaveEmployee = async () => {
     if (!editingEmp) return;
+    const v = parseOptionalAnnualQuota(empVacQuotaEdit);
+    const h = parseOptionalAnnualQuota(empHolQuotaEdit);
+    if (!v.ok || !h.ok) {
+      alert('Enter non-negative whole numbers for annual quotas, or leave blank to use global defaults.');
+      return;
+    }
     try {
       await updateEmployee(editingEmp.id, {
         name: editingEmp.name,
         departmentId: editingEmp.departmentId,
         manager: editingEmp.manager,
         startDate: editingEmp.startDate,
+        vacationQuota: v.value,
+        holidayQuota: h.value,
       });
-      setEditingEmp(null);
+      cancelEditEmployee();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : 'Failed to save employee');
     }
+  };
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredEmployees = useMemo(() => {
+    return employees.filter((emp) => {
+      const matchesName =
+        normalizedQuery === '' || emp.name.toLowerCase().includes(normalizedQuery);
+      const matchesDept =
+        selectedDeptIds.length === 0 || selectedDeptIds.includes(emp.departmentId);
+      return matchesName && matchesDept;
+    });
+  }, [employees, normalizedQuery, selectedDeptIds]);
+
+  const filtersActive = searchQuery.trim() !== '' || selectedDeptIds.length > 0;
+
+  const toggleDept = (id: string) =>
+    setSelectedDeptIds((prev) =>
+      prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id],
+    );
+
+  const clearPersonnelFilters = () => {
+    setSearchQuery('');
+    setSelectedDeptIds([]);
   };
 
   if (loading) {
@@ -230,7 +290,9 @@ export default function SettingsPage() {
                   Personnel Directory
                 </h2>
                 <p className="text-xs text-slate-500 font-mono">
-                  Archive management for {employees.length} active staff
+                  {filtersActive
+                    ? `Showing ${filteredEmployees.length} of ${employees.length} active staff`
+                    : `Archive management for ${employees.length} active staff`}
                 </p>
               </div>
               <button
@@ -243,15 +305,103 @@ export default function SettingsPage() {
             </header>
 
             <div className="flex-1 overflow-auto p-8">
+              <div className="mb-6 space-y-4">
+                <div className="flex flex-col lg:flex-row gap-4 lg:items-start">
+                  <div className="relative flex-1 min-w-0">
+                    <Search
+                      className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none"
+                      aria-hidden
+                    />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search by name..."
+                      className="w-full pl-10 pr-10 py-2.5 border border-slate-200 rounded-xl text-sm font-medium placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500/20 outline-none bg-slate-50/50"
+                    />
+                    {searchQuery !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                        aria-label="Clear search"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2 lg:max-w-xl lg:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDeptIds([])}
+                      className={cn(
+                        'px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
+                        selectedDeptIds.length === 0
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300',
+                      )}
+                    >
+                      All
+                    </button>
+                    {departments.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => toggleDept(d.id)}
+                        className={cn(
+                          'px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
+                          selectedDeptIds.includes(d.id)
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300',
+                        )}
+                      >
+                        {d.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 font-mono">
+                  <span>
+                    Showing {filteredEmployees.length} of {employees.length}
+                  </span>
+                  {filtersActive && (
+                    <button
+                      type="button"
+                      onClick={clearPersonnelFilters}
+                      className="text-blue-600 font-bold hover:underline"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {employees.map((emp) => (
+                {filteredEmployees.length === 0 && employees.length > 0 ? (
+                  <div className="col-span-full flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 py-16 px-6 text-center">
+                    <p className="text-sm font-semibold text-slate-700 mb-1">
+                      No staff match the current filters
+                    </p>
+                    <p className="text-xs text-slate-500 font-mono mb-4">
+                      Try a different name or department selection.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={clearPersonnelFilters}
+                      className="text-xs font-bold text-blue-600 hover:underline"
+                    >
+                      Clear filters
+                    </button>
+                  </div>
+                ) : (
+                  filteredEmployees.map((emp) => (
                   <motion.div
                     key={emp.id}
                     layout
                     className={cn(
                       'p-4 rounded-2xl border transition-all',
                       editingEmp?.id === emp.id
-                        ? 'border-blue-500 ring-4 ring-blue-500/10 bg-blue-50/20'
+                        ? 'border-blue-500 ring-4 ring-blue-200 bg-blue-50'
                         : 'border-slate-100 hover:border-slate-200 bg-white',
                     )}
                   >
@@ -320,10 +470,44 @@ export default function SettingsPage() {
                               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs"
                             />
                           </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-slate-400">
+                              Annual vacation quota
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={empVacQuotaEdit}
+                              onChange={(e) => setEmpVacQuotaEdit(e.target.value)}
+                              placeholder={`Default ${config.vacationQuota}`}
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
+                            />
+                            <p className="text-[10px] text-slate-400 leading-tight">
+                              Empty = global default ({config.vacationQuota} days)
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-slate-400">
+                              Annual holiday quota
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={empHolQuotaEdit}
+                              onChange={(e) => setEmpHolQuotaEdit(e.target.value)}
+                              placeholder={`Default ${config.holidayQuota}`}
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
+                            />
+                            <p className="text-[10px] text-slate-400 leading-tight">
+                              Empty = global default ({config.holidayQuota} days)
+                            </p>
+                          </div>
                         </div>
-                        <div className="flex gap-2 justify-end pt-2 border-t border-blue-100/50">
+                        <div className="flex gap-2 justify-end pt-2 border-t border-blue-100">
                           <button
-                            onClick={() => setEditingEmp(null)}
+                            onClick={cancelEditEmployee}
                             className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100 rounded-lg"
                           >
                             Discard
@@ -351,15 +535,24 @@ export default function SettingsPage() {
                             <h3 className="text-sm font-bold text-slate-900 tracking-tight">
                               {emp.name}
                             </h3>
-                            <p className="text-[10px] text-slate-400 font-mono uppercase truncate w-40">
+                            <p className="text-[10px] text-slate-400 font-mono uppercase truncate max-w-[14rem]">
                               {emp.department} &bull;{' '}
                               <span className="text-blue-500/70">{emp.manager}</span>
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-mono mt-1">
+                              Vac {emp.vacationQuota ?? config.vacationQuota}d · Hol{' '}
+                              {emp.holidayQuota ?? config.holidayQuota}d
+                              {(emp.vacationQuota !== null || emp.holidayQuota !== null) && (
+                                <span className="text-amber-600/90 font-semibold ml-1.5">
+                                  override
+                                </span>
+                              )}
                             </p>
                           </div>
                         </div>
                         <div className="flex gap-1">
                           <button
-                            onClick={() => setEditingEmp(emp)}
+                            onClick={() => beginEditEmployee(emp)}
                             className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-all"
                           >
                             <SettingsIcon className="w-4 h-4" />
@@ -374,7 +567,8 @@ export default function SettingsPage() {
                       </div>
                     )}
                   </motion.div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </>

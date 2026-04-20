@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   format,
   addDays,
@@ -11,6 +11,7 @@ import {
   isAfter,
   isBefore,
   addWeeks,
+  isLastDayOfMonth,
 } from 'date-fns';
 import {
   Plus,
@@ -40,6 +41,7 @@ function cn(...inputs: ClassValue[]) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const {
     loading,
     error,
@@ -126,7 +128,7 @@ export default function DashboardPage() {
   const handleToggle = (employeeId: string, date: string, type: AbsenceType) => {
     void upsertAbsence(employeeId, date, type).catch((err) => {
       console.error(err);
-      alert(err instanceof ApiError ? err.message : 'Failed to update absence');
+      alert(err instanceof Error ? err.message : 'Failed to update absence');
     });
   };
 
@@ -198,7 +200,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex h-screen bg-[#F1F5F9] text-[#1E293B] font-sans overflow-hidden p-6 gap-6">
-      <aside className="w-64 flex flex-col z-20 shrink-0">
+      <aside className="relative z-50 w-64 shrink-0 flex flex-col">
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col overflow-hidden">
           <div className="p-5 border-b border-slate-100">
             <div className="flex items-center gap-3 mb-6">
@@ -249,30 +251,32 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="mt-auto p-5 border-t border-slate-100 bg-slate-50/50">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shadow-sm">
+          <div className="relative z-10 mt-auto border-t border-slate-100 bg-slate-50/50 p-5">
+            <div className="flex min-h-9 items-center gap-3">
+              <div className="w-8 h-8 shrink-0 rounded-lg border border-slate-200 bg-white shadow-sm flex items-center justify-center">
                 <User className="w-4 h-4 text-slate-500" />
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold truncate">{user?.name ?? 'User'}</p>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-bold">{user?.name ?? 'User'}</p>
                 <div className="flex items-center gap-1">
                   <button
+                    type="button"
                     onClick={handleLogout}
-                    className="text-[10px] text-slate-400 font-medium hover:text-red-500 flex items-center gap-1"
+                    className="flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-red-500"
                   >
                     <LogOut className="w-2 h-2" /> Logout
                   </button>
                 </div>
               </div>
-              {user?.role === 'ADMIN' ? (
-                <button
-                  type="button"
-                  onClick={() => navigate('/settings')}
-                  className="p-1 hover:bg-slate-200 rounded-md ml-auto"
+              {isAdmin ? (
+                <Link
+                  to="/settings"
+                  title="System settings"
+                  aria-label="Open system settings"
+                  className="ml-auto flex shrink-0 items-center justify-center rounded-md p-2 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
                 >
-                  <Settings className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-600 transition-colors" />
-                </button>
+                  <Settings className="pointer-events-none h-3.5 w-3.5" />
+                </Link>
               ) : null}
             </div>
           </div>
@@ -338,11 +342,22 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
+            {isAdmin ? (
+              <Link
+                to="/settings"
+                title="System settings"
+                className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50"
+              >
+                <Settings className="pointer-events-none h-3.5 w-3.5 text-slate-500" />
+                Settings
+              </Link>
+            ) : null}
             <button
+              type="button"
               onClick={handleExport}
-              className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors shadow-sm"
+              className="flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="h-3.5 w-3.5" />
               Export
             </button>
           </div>
@@ -362,11 +377,13 @@ export default function DashboardPage() {
                     {calendarDays.map((day) => {
                       const isToday = isSameDay(day, today);
                       const isSatSun = isWeekend(day);
+                      const isMonthEnd = isLastDayOfMonth(day);
                       return (
                         <th
                           key={day.toISOString()}
                           className={cn(
                             'w-10 h-10 border-b border-r border-slate-200 font-normal p-0',
+                            isMonthEnd && 'border-r-2 border-r-slate-400',
                             isToday && 'bg-slate-900 text-white',
                             isSatSun && !isToday && 'bg-slate-100 text-slate-400',
                           )}
@@ -388,8 +405,10 @@ export default function DashboardPage() {
                     <tr key={emp.id} className="group transition-colors text-xs">
                       <td
                         className={cn(
-                          'sticky left-0 z-30 border-b border-r border-slate-200 bg-white group-hover:bg-slate-50 transition-colors p-0 cursor-pointer overflow-hidden shadow-[2px_0_5px_rgba(0,0,0,0.02)]',
-                          selectedEmployeeId === emp.id && 'bg-blue-50/50',
+                          'relative sticky left-0 z-30 cursor-pointer overflow-hidden border-b border-r border-slate-200 bg-white p-0 shadow-[2px_0_5px_rgba(0,0,0,0.02)] transition-colors',
+                          selectedEmployeeId === emp.id
+                            ? 'bg-blue-50 group-hover:bg-blue-100'
+                            : 'group-hover:bg-slate-50',
                         )}
                         onClick={() =>
                           setSelectedEmployeeId(emp.id === selectedEmployeeId ? null : emp.id)
@@ -413,18 +432,20 @@ export default function DashboardPage() {
                           (a) => a.employeeId === emp.id && a.date === dateStr,
                         );
                         const isSatSun = isWeekend(day);
+                        const isMonthEnd = isLastDayOfMonth(day);
                         return (
                           <td
                             key={`${emp.id}-${dateStr}`}
                             className={cn(
                               'w-10 h-10 border-b border-r border-slate-100 p-0.5 relative group-hover:bg-slate-50/30 transition-colors',
+                              isMonthEnd && 'border-r-2 border-r-slate-400',
                               isSatSun && 'bg-slate-50/50',
                             )}
                             onClick={() => {
-                              if (!isSatSun) {
-                                const nextType = selectedType === 'All' ? 'VACATION' : selectedType;
-                                handleToggle(emp.id, dateStr, nextType as AbsenceType);
-                              }
+                              if (isSatSun) return;
+                              setSelectedEmployeeId(emp.id);
+                              const nextType = selectedType === 'All' ? 'VACATION' : selectedType;
+                              handleToggle(emp.id, dateStr, nextType as AbsenceType);
                             }}
                           >
                             <div className="w-full h-full cursor-pointer relative">

@@ -13,6 +13,7 @@ import {
   Department,
   Employee,
 } from '../types';
+import { assertQuotaWithinLimits } from './balance';
 import { api } from './api';
 
 interface DataState {
@@ -27,7 +28,9 @@ interface DataState {
 interface DataContextValue extends DataState {
   refresh: () => Promise<void>;
 
-  createEmployee: (e: Omit<Employee, 'id' | 'department'>) => Promise<void>;
+  createEmployee: (
+    e: Omit<Employee, 'id' | 'department' | 'vacationQuota' | 'holidayQuota'>,
+  ) => Promise<void>;
   updateEmployee: (id: string, patch: Partial<Employee> & { departmentId?: string }) => Promise<void>;
   deleteEmployee: (id: string) => Promise<void>;
 
@@ -130,10 +133,46 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const upsertAbsence = useCallback<DataContextValue['upsertAbsence']>(
     async (employeeId, date, type) => {
-      // Toggle semantics: if matching record exists, remove or change type
       const existing = state.absences.find(
         (a) => a.employeeId === employeeId && a.date === date,
       );
+
+      let prospective: AbsenceRecord[];
+      if (existing) {
+        if (existing.type === type) {
+          prospective = state.absences.filter((a) => a.id !== existing.id);
+        } else {
+          prospective = state.absences.map((a) =>
+            a.id === existing.id ? { ...a, type } : a,
+          );
+        }
+      } else {
+        prospective = [
+          ...state.absences,
+          { id: '__pending__', employeeId, date, type },
+        ];
+      }
+
+      if (type !== 'SICK') {
+        const employee = state.employees.find((e) => e.id === employeeId);
+        if (employee) {
+          const empProspective = prospective
+            .filter((a) => a.employeeId === employeeId)
+            .map((a) => ({
+              date: new Date(a.date + 'T00:00:00.000Z'),
+              type: a.type,
+            }));
+          assertQuotaWithinLimits({
+            startDate: new Date(employee.startDate + 'T00:00:00.000Z'),
+            absencesForEmployee: empProspective,
+            affectedDates: [new Date(date + 'T00:00:00.000Z')],
+            vacationQuota: employee.vacationQuota ?? state.config.vacationQuota,
+            holidayQuota: employee.holidayQuota ?? state.config.holidayQuota,
+            carryoverDeadline: state.config.carryoverDeadline,
+          });
+        }
+      }
+
       if (existing) {
         if (existing.type === type) {
           await api.deleteAbsence(existing.id);
@@ -153,7 +192,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({ ...s, absences: [...s.absences, created] }));
       }
     },
-    [state.absences],
+    [state.absences, state.employees, state.config],
   );
 
   const deleteAbsence = useCallback<DataContextValue['deleteAbsence']>(async (id) => {

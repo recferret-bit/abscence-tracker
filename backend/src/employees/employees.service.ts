@@ -15,6 +15,8 @@ export interface EmployeeDto {
   department: string;
   manager: string;
   startDate: string;
+  vacationQuota: number | null;
+  holidayQuota: number | null;
 }
 
 const include = { department: true } as const;
@@ -60,6 +62,12 @@ export class EmployeesService {
       await this.requireDepartment(dto.departmentId);
       data.department = { connect: { id: dto.departmentId } };
     }
+    if (dto.vacationQuota !== undefined) {
+      data.vacationQuota = dto.vacationQuota;
+    }
+    if (dto.holidayQuota !== undefined) {
+      data.holidayQuota = dto.holidayQuota;
+    }
     try {
       const e = await this.prisma.employee.update({ where: { id }, data, include });
       return this.toDto(e);
@@ -104,6 +112,8 @@ export class EmployeesService {
       department: row.department.name,
       manager: row.manager,
       startDate: row.startDate.toISOString().slice(0, 10),
+      vacationQuota: row.vacationQuota,
+      holidayQuota: row.holidayQuota,
     };
   }
 }

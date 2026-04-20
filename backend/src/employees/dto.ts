@@ -1,4 +1,11 @@
-import { IsDateString, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsDateString,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateEmployeeDto {
   @IsString()
@@ -37,4 +44,16 @@ export class UpdateEmployeeDto {
   @IsDateString()
   @IsOptional()
   startDate?: string;
+
+  /** Omit or set to null to use global AppSettings default */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  vacationQuota?: number | null;
+
+  /** Omit or set to null to use global AppSettings default */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  holidayQuota?: number | null;
 }

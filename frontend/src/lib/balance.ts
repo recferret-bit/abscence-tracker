@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Absence, AbsenceType, AppSettings, Employee } from '../prisma/client';
+/**
+ * Faithful port of backend/src/balance/balance.service.ts pure balance math (UTC, same rounding).
+ */
 
-import { PrismaService } from '../prisma/prisma.service';
+import type { AbsenceType } from '../types';
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -15,20 +16,18 @@ const sameOrBefore = (a: Date, b: Date): boolean => a.getTime() <= b.getTime();
 const utcDate = (year: number, monthIdx: number, day: number): Date =>
   new Date(Date.UTC(year, monthIdx, day));
 
-const startOfYear = (year: number): Date => utcDate(year, 0, 1);
 const endOfYear = (year: number): Date => utcDate(year, 11, 31);
 const startOfMonth = (year: number, monthIdx: number): Date =>
   utcDate(year, monthIdx, 1);
 
+export interface AbsenceLike {
+  date: Date;
+  type: AbsenceType;
+}
+
 /**
  * Number of full calendar months the employee was already employed for, between
- * Jan 1 of `year` and `upTo` (inclusive). A month counts if startDate <= first
- * day of that month AND we have not passed `upTo` before that first day.
- *
- * Examples:
- *   startDate = 2025-07-15, year = 2025, upTo = 2025-12-31  → months [Aug..Dec] = 5
- *   startDate = 2025-07-01, year = 2025, upTo = 2025-12-31  → months [Jul..Dec] = 6
- *   startDate = 2025-07-15, year = 2026, upTo = 2026-04-20  → months [Jan..Apr] = 4
+ * Jan 1 of `year` and `upTo` (inclusive).
  */
 export function monthsWorkedInYear(
   startDate: Date,
@@ -44,12 +43,8 @@ export function monthsWorkedInYear(
   return count;
 }
 
-/**
- * Counts working-day absences of the given type in a year, optionally bounded
- * by an inclusive upper date.
- */
 function workingDayAbsences(
-  absences: Absence[],
+  absences: AbsenceLike[],
   year: number,
   type: AbsenceType,
   upTo?: Date,
@@ -63,7 +58,7 @@ function workingDayAbsences(
   }).length;
 }
 
-export interface BalanceBlock {
+export interface BalanceBlockComputed {
   quota: number;
   accruedYTD: number;
   accruedYear: number;
@@ -75,50 +70,48 @@ export interface BalanceBlock {
   balanceEoy: number;
 }
 
-export interface BalanceResponse {
+export interface ComputeBalanceResult {
   asOf: string;
   workingYear: number;
-  employmentStartDate: string;
-  vacation: BalanceBlock;
-  holiday: BalanceBlock;
+  vacation: BalanceBlockComputed;
+  holiday: BalanceBlockComputed;
   sick: { used: number };
 }
 
 interface ComputeArgs {
   startDate: Date;
   asOf: Date;
-  absences: Absence[];
+  absences: AbsenceLike[];
   vacationQuota: number;
   holidayQuota: number;
-  carryoverDeadline: string; // MM-DD
+  carryoverDeadline: string;
 }
 
-/**
- * Pure computation of an employee's balance. Exposed for unit testing.
- */
-export function computeBalance(args: ComputeArgs): Omit<BalanceResponse, 'employmentStartDate'> {
+export function computeBalance(args: ComputeArgs): ComputeBalanceResult {
   const { startDate, asOf, absences, vacationQuota, holidayQuota, carryoverDeadline } = args;
   const startYear = startDate.getUTCFullYear();
   const currentYear = asOf.getUTCFullYear();
 
-  // 1. Walk previous years to compute the vacation carry-in into currentYear.
   let vacCarry = 0;
   for (let y = startYear; y < currentYear; y++) {
     const accruedY =
       monthsWorkedInYear(startDate, y, endOfYear(y)) * (vacationQuota / 12);
-    const usedY = workingDayAbsences(absences, y, AbsenceType.VACATION);
+    const usedY = workingDayAbsences(absences, y, 'VACATION');
     vacCarry = Math.max(0, accruedY - usedY);
   }
 
-  // 2. Carry deadline & forfeit logic for currentYear.
   const [mmStr, ddStr] = carryoverDeadline.split('-');
-  const deadline = utcDate(currentYear, parseInt(mmStr, 10) - 1, parseInt(ddStr, 10));
+  const deadline = utcDate(
+    currentYear,
+    Number.parseInt(mmStr, 10) - 1,
+    Number.parseInt(ddStr, 10),
+  );
   const pastDeadline = asOf.getTime() > deadline.getTime();
 
   const usedVacBeforeDeadline = workingDayAbsences(
     absences,
     currentYear,
-    AbsenceType.VACATION,
+    'VACATION',
     asOf.getTime() < deadline.getTime() ? asOf : deadline,
   );
 
@@ -129,22 +122,21 @@ export function computeBalance(args: ComputeArgs): Omit<BalanceResponse, 'employ
     ? Math.max(0, vacCarry - usedVacBeforeDeadline)
     : 0;
 
-  // 3. Current year accruals & usage.
   const vacAccruedYTD =
     monthsWorkedInYear(startDate, currentYear, asOf) * (vacationQuota / 12);
   const vacAccruedYear =
     monthsWorkedInYear(startDate, currentYear, endOfYear(currentYear)) *
     (vacationQuota / 12);
-  const vacUsed = workingDayAbsences(absences, currentYear, AbsenceType.VACATION, asOf);
+  const vacUsed = workingDayAbsences(absences, currentYear, 'VACATION', asOf);
 
   const holAccruedYTD =
     monthsWorkedInYear(startDate, currentYear, asOf) * (holidayQuota / 12);
   const holAccruedYear =
     monthsWorkedInYear(startDate, currentYear, endOfYear(currentYear)) *
     (holidayQuota / 12);
-  const holUsed = workingDayAbsences(absences, currentYear, AbsenceType.HOLIDAY, asOf);
+  const holUsed = workingDayAbsences(absences, currentYear, 'HOLIDAY', asOf);
 
-  const sickUsed = workingDayAbsences(absences, currentYear, AbsenceType.SICK, asOf);
+  const sickUsed = workingDayAbsences(absences, currentYear, 'SICK', asOf);
 
   return {
     asOf: asOf.toISOString().slice(0, 10),
@@ -165,7 +157,6 @@ export function computeBalance(args: ComputeArgs): Omit<BalanceResponse, 'employ
       accruedYTD: round1(holAccruedYTD),
       accruedYear: round1(holAccruedYear),
       used: holUsed,
-      // TZ REQ-04: holidays burn at year end → carry always 0
       carryIn: 0,
       carryInExpiresAt: null,
       carryInForfeited: 0,
@@ -176,44 +167,42 @@ export function computeBalance(args: ComputeArgs): Omit<BalanceResponse, 'employ
   };
 }
 
-@Injectable()
-export class BalanceService {
-  constructor(private readonly prisma: PrismaService) {}
+/**
+ * Validates prospective absences for one employee against vacation/holiday quota per affected calendar year.
+ * Throws Error with message if either balance would go negative.
+ */
+export function assertQuotaWithinLimits(args: {
+  startDate: Date;
+  absencesForEmployee: AbsenceLike[];
+  affectedDates: Date[];
+  vacationQuota: number;
+  holidayQuota: number;
+  carryoverDeadline: string;
+}): void {
+  const { startDate, absencesForEmployee, affectedDates, vacationQuota, holidayQuota, carryoverDeadline } =
+    args;
+  const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+  const years = new Set(affectedDates.map((d) => d.getUTCFullYear()));
 
-  async getForEmployee(employeeId: string, asOfStr?: string): Promise<BalanceResponse> {
-    const employee = await this.prisma.employee.findUnique({ where: { id: employeeId } });
-    if (!employee) throw new NotFoundException('Employee not found');
-
-    const settings = (await this.prisma.appSettings.findUnique({ where: { id: 1 } })) ??
-      (await this.prisma.appSettings.create({ data: { id: 1 } }));
-
-    const absences = await this.prisma.absence.findMany({
-      where: { employeeId },
-      orderBy: { date: 'asc' },
-    });
-
-    const asOf = asOfStr
-      ? new Date(asOfStr + (asOfStr.includes('T') ? '' : 'T00:00:00.000Z'))
-      : new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+  for (const Y of years) {
+    const datesInYear = affectedDates.filter((d) => d.getUTCFullYear() === Y);
+    const latestInYear = new Date(Math.max(...datesInYear.map((d) => d.getTime())));
+    const asOf = new Date(Math.max(todayUtc.getTime(), latestInYear.getTime()));
 
     const result = computeBalance({
-      startDate: employee.startDate,
+      startDate,
       asOf,
-      absences,
-      vacationQuota: employee.vacationQuota ?? settings.vacationQuota,
-      holidayQuota: employee.holidayQuota ?? settings.holidayQuota,
-      carryoverDeadline: settings.carryoverDeadline,
+      absences: absencesForEmployee,
+      vacationQuota,
+      holidayQuota,
+      carryoverDeadline,
     });
 
-    return { ...result, employmentStartDate: employee.startDate.toISOString().slice(0, 10) };
+    if (result.vacation.balanceToday < 0) {
+      throw new Error(`Vacation quota exceeded for ${Y}`);
+    }
+    if (result.holiday.balanceToday < 0) {
+      throw new Error(`Holiday quota exceeded for ${Y}`);
+    }
   }
 }
-
-// Helpers re-exported only for tests
-export const __testing = {
-  computeBalance,
-  monthsWorkedInYear,
-};
-
-// Avoid unused-warning for Employee/AppSettings import
-export type _BalanceImports = Employee | AppSettings;
