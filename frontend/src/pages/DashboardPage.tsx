@@ -474,13 +474,34 @@ export default function DashboardPage() {
         <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col mt-2">
           <div className="flex-1 overflow-auto relative scroll-smooth bg-white" ref={scrollRef}>
             <div className="inline-block min-w-full">
+              <div className="sticky top-0 z-40 flex bg-slate-50/90 backdrop-blur-sm">
+                <div className="sticky left-0 z-50 w-56 h-6 border-r border-slate-200 bg-slate-50 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
+                  <div className="h-full px-4 flex items-center text-[10px] uppercase tracking-wider font-bold text-slate-500">
+                    Employee &amp; Metrics
+                  </div>
+                </div>
+                {calendarDays.map((day) => {
+                  const isSatSun = isWeekend(day);
+                  const isMonthEnd = isLastDayOfMonth(day);
+                  return (
+                    <div
+                      key={`month-${day.toISOString()}`}
+                      className={cn(
+                        'w-10 h-6 border-b border-r border-slate-200 flex items-center justify-center text-[9px] uppercase font-semibold text-slate-500',
+                        isMonthEnd && 'border-r-2 border-r-slate-400',
+                        isSatSun && 'text-slate-400 bg-slate-50/60',
+                      )}
+                    >
+                      {format(day, 'MMM')}
+                    </div>
+                  );
+                })}
+              </div>
               <table className="border-separate border-spacing-0 table-fixed w-full">
                 <thead>
-                  <tr className="bg-slate-50/80 backdrop-blur-sm sticky top-0 z-40">
+                  <tr className="bg-slate-50/80 backdrop-blur-sm sticky top-6 z-30">
                     <th className="sticky left-0 z-50 bg-slate-50 border-b border-r border-slate-200 w-56 p-0 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
-                      <div className="h-10 px-4 flex items-center text-[10px] uppercase tracking-wider font-bold text-slate-500">
-                        Employee &amp; Metrics
-                      </div>
+                      <div className="h-10" />
                     </th>
                     {calendarDays.map((day) => {
                       const isToday = isSameDay(day, today);

@@ -51,6 +51,12 @@ const DEFAULT_CONFIG: AppConfig = {
   carryoverDeadline: '06-30',
 };
 
+function sortEmployeesByName(employees: Employee[]): Employee[] {
+  return [...employees].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+  );
+}
+
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<DataState>({
     loading: true,
@@ -75,7 +81,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         error: null,
         config,
         departments,
-        employees,
+        employees: sortEmployeesByName(employees),
         absences,
       });
     } catch (err) {
@@ -98,14 +104,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       manager: e.manager,
       startDate: e.startDate,
     });
-    setState((s) => ({ ...s, employees: [...s.employees, created] }));
+    setState((s) => ({
+      ...s,
+      employees: sortEmployeesByName([...s.employees, created]),
+    }));
   }, []);
 
   const updateEmployee = useCallback<DataContextValue['updateEmployee']>(async (id, patch) => {
     const updated = await api.updateEmployee(id, patch);
     setState((s) => ({
       ...s,
-      employees: s.employees.map((e) => (e.id === id ? updated : e)),
+      employees: sortEmployeesByName(s.employees.map((e) => (e.id === id ? updated : e))),
     }));
   }, []);
 
