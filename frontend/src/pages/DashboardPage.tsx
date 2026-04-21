@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   format,
-  addDays,
   eachDayOfInterval,
   isWeekend,
   isSameDay,
@@ -10,7 +9,8 @@ import {
   startOfToday,
   isAfter,
   isBefore,
-  addWeeks,
+  addMonths,
+  endOfMonth,
   isLastDayOfMonth,
 } from 'date-fns';
 import {
@@ -22,21 +22,30 @@ import {
   X,
   LogOut,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { AbsenceType, BalanceResponse } from '../types';
+import { AbsenceType } from '../types';
 import { CATEGORY_COLORS } from '../constants';
 import { downloadCsv, toCsv } from '../lib/csv-export';
 import { useData } from '../lib/data-context';
 import { useAuth } from '../lib/auth-context';
-import { api, ApiError } from '../lib/api';
+import { computeBalance } from '../lib/balance';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+type Quarter = 1 | 2 | 3 | 4;
+const typeIndicatorColors: Record<AbsenceType, string> = {
+  VACATION: 'bg-green-500',
+  HOLIDAY: 'bg-blue-500',
+  SICK: 'bg-red-500',
+};
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -52,22 +61,46 @@ export default function DashboardPage() {
     upsertAbsence,
   } = useData();
 
+  const today = startOfToday();
+  const todayStr = format(today, 'yyyy-MM-dd');
+  const currentYear = today.getFullYear();
+  const currentQuarter = (Math.floor(today.getMonth() / 3) + 1) as Quarter;
+
   const [selectedDept, setSelectedDept] = useState<string>('All');
   const [selectedType, setSelectedType] = useState<AbsenceType | 'All'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
-  const [balance, setBalance] = useState<BalanceResponse | null>(null);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+  const [selectedQuarter, setSelectedQuarter] = useState<Quarter>(currentQuarter);
 
-  const today = startOfToday();
-  const todayStr = format(today, 'yyyy-MM-dd');
+  const earliestYear = useMemo(() => {
+    if (employees.length === 0) return currentYear;
+    return Math.min(...employees.map((employee) => parseISO(employee.startDate).getFullYear()));
+  }, [employees, currentYear]);
+  const latestYear = currentYear + 1;
+  const maxSelectableYear = Math.max(earliestYear, latestYear);
 
-  const calendarDays = useMemo(() => {
-    return eachDayOfInterval({
-      start: addWeeks(today, -2),
-      end: addDays(today, 60),
-    });
-  }, [today]);
+  const yearOptions = useMemo(() => {
+    const totalYears = maxSelectableYear - earliestYear + 1;
+    return Array.from({ length: totalYears }, (_, index) => earliestYear + index);
+  }, [earliestYear, maxSelectableYear]);
+
+  const quarterStart = useMemo(
+    () => new Date(selectedYear, (selectedQuarter - 1) * 3, 1),
+    [selectedYear, selectedQuarter],
+  );
+  const quarterEnd = useMemo(() => endOfMonth(addMonths(quarterStart, 2)), [quarterStart]);
+  const monthRangeLabel = useMemo(
+    () => `${format(quarterStart, 'MMM')} - ${format(quarterEnd, 'MMM')}`,
+    [quarterStart, quarterEnd],
+  );
+  const isTodayInSelectedQuarter =
+    selectedYear === currentYear && selectedQuarter === currentQuarter;
+
+  const calendarDays = useMemo(
+    () => eachDayOfInterval({ start: quarterStart, end: quarterEnd }),
+    [quarterStart, quarterEnd],
+  );
 
   const filteredEmployees = useMemo(() => {
     return employees.filter((emp) => {
@@ -84,41 +117,84 @@ export default function DashboardPage() {
     [employees, selectedEmployeeId],
   );
 
-  useEffect(() => {
-    if (!selectedEmployeeId) {
-      setBalance(null);
-      setBalanceError(null);
-      return;
-    }
-    let cancelled = false;
-    setBalanceError(null);
-    api
-      .getBalance(selectedEmployeeId, todayStr)
-      .then((b) => {
-        if (!cancelled) setBalance(b);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setBalance(null);
-        setBalanceError(
-          err instanceof ApiError ? err.message : 'Failed to load balance',
-        );
-      });
-    return () => {
-      cancelled = true;
+  const balance = useMemo(() => {
+    if (!selectedEmployee) return null;
+    const asOf = new Date(`${todayStr}T00:00:00.000Z`);
+    const startDate = new Date(`${selectedEmployee.startDate}T00:00:00.000Z`);
+    const currentYear = asOf.getUTCFullYear();
+
+    const forEmployee = absences
+      .filter((a) => a.employeeId === selectedEmployee.id)
+      .map((a) => ({
+        date: new Date(`${a.date}T00:00:00.000Z`),
+        type: a.type,
+      }));
+
+    // Use today as asOf so carry-in / deadline logic is correct.
+    const computed = computeBalance({
+      startDate,
+      asOf,
+      absences: forEmployee,
+      vacationQuota: selectedEmployee.vacationQuota ?? config.vacationQuota,
+      holidayQuota: selectedEmployee.holidayQuota ?? config.holidayQuota,
+      carryoverDeadline: config.carryoverDeadline,
+    });
+
+    // Count ALL working-day absences in the current year — past AND future —
+    // so the card reflects planned absences the moment a cell is clicked.
+    const isUtcWeekend = (d: Date) => { const day = d.getUTCDay(); return day === 0 || day === 6; };
+    const countYear = (type: AbsenceType) =>
+      forEmployee.filter(
+        (a) => a.type === type && a.date.getUTCFullYear() === currentYear && !isUtcWeekend(a.date),
+      ).length;
+
+    const round1 = (n: number) => Math.round(n * 10) / 10;
+    const vacUsed = countYear('VACATION');
+    const holUsed = countYear('HOLIDAY');
+    const sickUsed = countYear('SICK');
+
+    return {
+      ...computed,
+      vacation: {
+        ...computed.vacation,
+        used: vacUsed,
+        balanceToday: round1(computed.vacation.accruedYTD + computed.vacation.carryIn - vacUsed),
+      },
+      holiday: {
+        ...computed.holiday,
+        used: holUsed,
+        balanceToday: round1(computed.holiday.accruedYTD - holUsed),
+      },
+      sick: { used: sickUsed },
     };
-  }, [selectedEmployeeId, todayStr, absences]);
+  }, [selectedEmployee, absences, config, todayStr]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const previousYearRef = useRef<number>(selectedYear);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      const todayCell = scrollRef.current.querySelector('[data-today="true"]');
-      if (todayCell) {
-        todayCell.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
-      }
+    if (selectedYear < earliestYear) {
+      setSelectedYear(earliestYear);
+      return;
     }
-  }, [employees.length]);
+    if (selectedYear > maxSelectableYear) {
+      setSelectedYear(maxSelectableYear);
+    }
+  }, [selectedYear, earliestYear, maxSelectableYear]);
+
+  useEffect(() => {
+    if (previousYearRef.current === selectedYear) return;
+    previousYearRef.current = selectedYear;
+    setSelectedQuarter(selectedYear === currentYear ? currentQuarter : 1);
+  }, [selectedYear, currentYear, currentQuarter]);
+
+  useEffect(() => {
+    if (!isTodayInSelectedQuarter || !scrollRef.current) return;
+    const todayCell = scrollRef.current.querySelector('[data-today="true"]');
+    if (todayCell) {
+      todayCell.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+    }
+  }, [employees.length, selectedYear, selectedQuarter, isTodayInSelectedQuarter]);
 
   const handleLogout = async () => {
     await logout();
@@ -177,7 +253,7 @@ export default function DashboardPage() {
       { key: 'type', header: 'Type' },
     ]);
 
-    const filename = `absences_${selectedDept}_${selectedType}_${todayStr}.csv`;
+    const filename = `absences_${selectedDept}_${selectedType}_${selectedYear}_Q${selectedQuarter}.csv`;
     downloadCsv(filename, csv);
   };
 
@@ -284,9 +360,9 @@ export default function DashboardPage() {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0 gap-6">
-        <header className="flex items-start justify-between z-10 shrink-0 h-14">
-          <div className="flex gap-10">
-            <div>
+        <header className="flex items-center justify-between z-10 shrink-0 h-14">
+          <div className="grid grid-cols-[14rem_auto] items-center">
+            <div className="pr-6 border-r border-slate-200">
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">
                 Consolidated Schedule
               </h2>
@@ -295,27 +371,63 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            <div className="flex gap-8 border-l border-slate-200 pl-8 items-center">
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                  Today
-                </span>
-                <span className="text-sm font-mono font-bold text-slate-700">
-                  {format(today, 'dd MMM yyyy').toUpperCase()}
-                </span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                  Working Year
-                </span>
-                <span className="text-sm font-mono font-bold text-slate-700">
-                  FY{format(today, 'yy')}
-                </span>
-              </div>
+            <div className="flex flex-col pl-6">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                Today
+              </span>
+              <span className="text-sm font-mono font-bold text-slate-700">
+                {format(today, 'dd MMM yyyy').toUpperCase()}
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1 shadow-sm">
+              <label htmlFor="dashboard-year-select" className="sr-only">
+                Select calendar year
+              </label>
+              <select
+                id="dashboard-year-select"
+                value={selectedYear}
+                onChange={(event) => setSelectedYear(Number(event.target.value))}
+                className="h-7 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none transition-colors hover:border-slate-300 focus:ring-2 focus:ring-blue-500/20"
+              >
+                {yearOptions.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                aria-label="Previous quarter"
+                onClick={() =>
+                  setSelectedQuarter((quarter) => Math.max(1, quarter - 1) as Quarter)
+                }
+                disabled={selectedQuarter === 1}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+
+              <span className="whitespace-nowrap text-[11px] font-mono font-semibold uppercase text-slate-600">
+                Q{selectedQuarter} {selectedYear} &middot; {monthRangeLabel}
+              </span>
+
+              <button
+                type="button"
+                aria-label="Next quarter"
+                onClick={() =>
+                  setSelectedQuarter((quarter) => Math.min(4, quarter + 1) as Quarter)
+                }
+                disabled={selectedQuarter === 4}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
             <div className="flex bg-white border border-slate-200 p-1 rounded-lg shadow-sm">
               {(['VACATION', 'HOLIDAY', 'SICK'] as AbsenceType[]).map((type) => (
                 <button
@@ -331,11 +443,7 @@ export default function DashboardPage() {
                   <div
                     className={cn(
                       'w-2 h-2 rounded-sm',
-                      type === 'VACATION'
-                        ? 'bg-green-500'
-                        : type === 'HOLIDAY'
-                          ? 'bg-blue-500'
-                          : 'bg-red-500',
+                      typeIndicatorColors[type],
                     )}
                   />
                   {type}
@@ -444,8 +552,9 @@ export default function DashboardPage() {
                             onClick={() => {
                               if (isSatSun) return;
                               setSelectedEmployeeId(emp.id);
-                              const nextType = selectedType === 'All' ? 'VACATION' : selectedType;
-                              handleToggle(emp.id, dateStr, nextType as AbsenceType);
+                              const nextType = (selectedType === 'All' ? 'VACATION' : selectedType) as AbsenceType;
+                              if (selectedType === 'All') setSelectedType('VACATION');
+                              handleToggle(emp.id, dateStr, nextType);
                             }}
                           >
                             <div className="w-full h-full cursor-pointer relative">
@@ -594,16 +703,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
-            </motion.div>
-          )}
-          {selectedEmployee && balanceError && (
-            <motion.div
-              initial={{ y: 200, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 200, opacity: 0 }}
-              className="bg-red-50 text-red-700 border border-red-200 rounded-xl p-3 text-xs font-bold flex items-center gap-2 z-30 shrink-0"
-            >
-              <AlertTriangle className="w-4 h-4" /> {balanceError}
             </motion.div>
           )}
         </AnimatePresence>

@@ -120,7 +120,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const createDepartment = useCallback<DataContextValue['createDepartment']>(async (name) => {
     const created = await api.createDepartment(name);
-    setState((s) => ({ ...s, departments: [...s.departments, created] }));
+    setState((s) => ({
+      ...s,
+      departments: [...s.departments, created].sort((a, b) => a.name.localeCompare(b.name)),
+    }));
   }, []);
 
   const deleteDepartment = useCallback<DataContextValue['deleteDepartment']>(async (id) => {
@@ -173,23 +176,39 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      if (existing) {
-        if (existing.type === type) {
-          await api.deleteAbsence(existing.id);
-          setState((s) => ({
-            ...s,
-            absences: s.absences.filter((a) => a.id !== existing.id),
-          }));
+      // Optimistic update — apply immediately so the balance card reflects the
+      // change before the API round-trip completes.
+      const previousAbsences = state.absences;
+      setState((s) => ({ ...s, absences: prospective }));
+
+      try {
+        if (existing) {
+          if (existing.type === type) {
+            await api.deleteAbsence(existing.id);
+            // Already removed optimistically; nothing more needed.
+          } else {
+            const updated = await api.updateAbsence(existing.id, type);
+            setState((s) => ({
+              ...s,
+              absences: s.absences.map((a) => (a.id === existing.id ? updated : a)),
+            }));
+          }
         } else {
-          const updated = await api.updateAbsence(existing.id, type);
+          const created = await api.createAbsence({ employeeId, date, type });
+          // Replace the __pending__ placeholder with the real record from the server.
           setState((s) => ({
             ...s,
-            absences: s.absences.map((a) => (a.id === existing.id ? updated : a)),
+            absences: s.absences.map((a) =>
+              a.id === '__pending__' && a.employeeId === employeeId && a.date === date
+                ? created
+                : a,
+            ),
           }));
         }
-      } else {
-        const created = await api.createAbsence({ employeeId, date, type });
-        setState((s) => ({ ...s, absences: [...s.absences, created] }));
+      } catch (err) {
+        // Roll back to the state before the optimistic update.
+        setState((s) => ({ ...s, absences: previousAbsences }));
+        throw err;
       }
     },
     [state.absences, state.employees, state.config],

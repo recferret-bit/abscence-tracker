@@ -53,6 +53,7 @@ export default function SettingsPage() {
 
   const [activeTab, setActiveTab] = useState<'personnel' | 'org'>('personnel');
   const [newDeptName, setNewDeptName] = useState('');
+  const [submittingDept, setSubmittingDept] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
   const [empVacQuotaEdit, setEmpVacQuotaEdit] = useState('');
   const [empHolQuotaEdit, setEmpHolQuotaEdit] = useState('');
@@ -108,12 +109,19 @@ export default function SettingsPage() {
 
   const handleAddDepartment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDeptName) return;
+    const name = newDeptName.trim();
+    if (!name) {
+      alert('Enter a department name.');
+      return;
+    }
+    setSubmittingDept(true);
     try {
-      await createDepartment(newDeptName);
+      await createDepartment(name);
       setNewDeptName('');
     } catch (err) {
       alert(err instanceof ApiError ? err.message : 'Failed to add department');
+    } finally {
+      setSubmittingDept(false);
     }
   };
 
@@ -590,16 +598,17 @@ export default function SettingsPage() {
                   type="text"
                   value={newDeptName}
                   onChange={(e) => setNewDeptName(e.target.value)}
-                  placeholder="Department unique ID..."
-                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-medium placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                  placeholder="Department name"
+                  disabled={submittingDept}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-medium placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500/20 outline-none disabled:opacity-60"
                 />
                 <button
                   type="submit"
-                  disabled={!newDeptName}
+                  disabled={!newDeptName.trim() || submittingDept}
                   className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-800 disabled:opacity-50 transition-all flex items-center gap-2 whitespace-nowrap"
                 >
                   <Plus className="w-4 h-4" />
-                  Register Unit
+                  {submittingDept ? 'Saving…' : 'Register Unit'}
                 </button>
               </form>
             </header>
