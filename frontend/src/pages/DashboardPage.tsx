@@ -7,8 +7,6 @@ import {
   isSameDay,
   parseISO,
   startOfToday,
-  isAfter,
-  isBefore,
   addMonths,
   endOfMonth,
   isLastDayOfMonth,
@@ -46,6 +44,24 @@ const typeIndicatorColors: Record<AbsenceType, string> = {
   HOLIDAY: 'bg-blue-500',
   SICK: 'bg-red-500',
 };
+
+const isUtcWeekend = (d: Date): boolean => {
+  const day = d.getUTCDay();
+  return day === 0 || day === 6;
+};
+
+function countWorkingDaysInRange(
+  absences: Array<{ date: string; type: AbsenceType }>,
+  type: AbsenceType,
+  rangeStart: string,
+  rangeEnd: string,
+): number {
+  return absences.filter((absence) => {
+    if (absence.type !== type) return false;
+    if (absence.date < rangeStart || absence.date > rangeEnd) return false;
+    return !isUtcWeekend(new Date(`${absence.date}T00:00:00.000Z`));
+  }).length;
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -209,51 +225,85 @@ export default function DashboardPage() {
   };
 
   const handleExport = () => {
-    const employeeIds = new Set(filteredEmployees.map((e) => e.id));
-    const empById = new Map<string, (typeof filteredEmployees)[number]>(
-      filteredEmployees.map((e) => [e.id, e]),
-    );
-    const rangeStart = calendarDays[0];
-    const rangeEnd = calendarDays[calendarDays.length - 1];
+    const quarterStartStr = format(quarterStart, 'yyyy-MM-dd');
+    const quarterEndStr = format(quarterEnd, 'yyyy-MM-dd');
+    const effectiveAsOfBase = new Date(Math.min(today.getTime(), quarterEnd.getTime()));
+    const effectiveAsOfStr = format(effectiveAsOfBase, 'yyyy-MM-dd');
+    const effectiveAsOfDate = new Date(`${effectiveAsOfStr}T00:00:00.000Z`);
 
-    const rows = absences
-      .filter((a) => {
-        if (!employeeIds.has(a.employeeId)) return false;
-        if (selectedType !== 'All' && a.type !== selectedType) return false;
-        const d = parseISO(a.date);
-        if (isBefore(d, rangeStart) || isAfter(d, rangeEnd)) return false;
-        return true;
+    const rows = [...filteredEmployees]
+      .sort((a, b) => {
+        const dept = a.department.localeCompare(b.department);
+        if (dept !== 0) return dept;
+        return a.name.localeCompare(b.name);
       })
-      .map((a) => {
-        const emp = empById.get(a.employeeId);
-        if (!emp) return null;
-        const d = parseISO(a.date);
+      .map((employee) => {
+        const absencesForEmployee = absences.filter((absence) => absence.employeeId === employee.id);
+        const balance = computeBalance({
+          startDate: new Date(`${employee.startDate}T00:00:00.000Z`),
+          asOf: effectiveAsOfDate,
+          absences: absencesForEmployee.map((absence) => ({
+            date: new Date(`${absence.date}T00:00:00.000Z`),
+            type: absence.type,
+          })),
+          vacationQuota: employee.vacationQuota ?? config.vacationQuota,
+          holidayQuota: employee.holidayQuota ?? config.holidayQuota,
+          carryoverDeadline: config.carryoverDeadline,
+        });
+
         return {
-          employee: emp.name,
-          department: emp.department,
-          manager: emp.manager,
-          date: a.date,
-          dayOfWeek: format(d, 'EEEE'),
-          type: a.type,
+          employee: employee.name,
+          department: employee.department,
+          manager: employee.manager,
+          contractStart: employee.startDate,
+          year: selectedYear,
+          quarter: `Q${selectedQuarter}`,
+          asOf: effectiveAsOfStr,
+          vacationUsedQuarter: countWorkingDaysInRange(
+            absencesForEmployee,
+            'VACATION',
+            quarterStartStr,
+            quarterEndStr,
+          ),
+          holidayUsedQuarter: countWorkingDaysInRange(
+            absencesForEmployee,
+            'HOLIDAY',
+            quarterStartStr,
+            quarterEndStr,
+          ),
+          sickUsedQuarter: countWorkingDaysInRange(
+            absencesForEmployee,
+            'SICK',
+            quarterStartStr,
+            quarterEndStr,
+          ),
+          vacationUsedYtd: balance.vacation.used,
+          holidayUsedYtd: balance.holiday.used,
+          sickUsedYtd: balance.sick.used,
+          vacationLeft: balance.vacation.balanceToday,
+          holidayLeft: balance.holiday.balanceToday,
         };
-      })
-      .filter((row): row is NonNullable<typeof row> => row !== null)
-      .sort((a, b) =>
-        a.employee === b.employee
-          ? a.date.localeCompare(b.date)
-          : a.employee.localeCompare(b.employee),
-      );
+      });
 
     const csv = toCsv(rows, [
       { key: 'employee', header: 'Employee' },
       { key: 'department', header: 'Department' },
       { key: 'manager', header: 'Manager' },
-      { key: 'date', header: 'Date' },
-      { key: 'dayOfWeek', header: 'Day Of Week' },
-      { key: 'type', header: 'Type' },
+      { key: 'contractStart', header: 'Contract start' },
+      { key: 'year', header: 'Year' },
+      { key: 'quarter', header: 'Quarter' },
+      { key: 'asOf', header: 'As of' },
+      { key: 'vacationUsedQuarter', header: 'Vacation used (quarter)' },
+      { key: 'holidayUsedQuarter', header: 'Holiday used (quarter)' },
+      { key: 'sickUsedQuarter', header: 'Sick used (quarter)' },
+      { key: 'vacationUsedYtd', header: 'Vacation used (YTD)' },
+      { key: 'holidayUsedYtd', header: 'Holiday used (YTD)' },
+      { key: 'sickUsedYtd', header: 'Sick used (YTD)' },
+      { key: 'vacationLeft', header: 'Vacation left' },
+      { key: 'holidayLeft', header: 'Holiday left' },
     ]);
 
-    const filename = `absences_${selectedDept}_${selectedType}_${selectedYear}_Q${selectedQuarter}.csv`;
+    const filename = `employee_balances_${selectedDept}_${selectedYear}_Q${selectedQuarter}.csv`;
     downloadCsv(filename, csv);
   };
 
