@@ -29,7 +29,16 @@ interface DataContextValue extends DataState {
   refresh: () => Promise<void>;
 
   createEmployee: (
-    e: Omit<Employee, 'id' | 'department' | 'vacationQuota' | 'holidayQuota'>,
+    e: Omit<
+      Employee,
+      | 'id'
+      | 'department'
+      | 'vacationQuota'
+      | 'holidayQuota'
+      | 'vacationAdjustment'
+      | 'holidayAdjustment'
+      | 'sickAdjustment'
+    >,
   ) => Promise<void>;
   updateEmployee: (id: string, patch: Partial<Employee> & { departmentId?: string }) => Promise<void>;
   deleteEmployee: (id: string) => Promise<void>;
@@ -181,6 +190,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
             vacationQuota: employee.vacationQuota ?? state.config.vacationQuota,
             holidayQuota: employee.holidayQuota ?? state.config.holidayQuota,
             carryoverDeadline: state.config.carryoverDeadline,
+            vacationAdjustment: employee.vacationAdjustment,
+            holidayAdjustment: employee.holidayAdjustment,
           });
         }
       }

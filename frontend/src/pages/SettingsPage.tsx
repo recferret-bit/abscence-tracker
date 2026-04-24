@@ -14,9 +14,9 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-import { Employee } from '../types';
+import { BalanceResponse, Employee } from '../types';
 import { useData } from '../lib/data-context';
-import { ApiError } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -32,6 +32,14 @@ function parseOptionalAnnualQuota(
   if (t === '') return { ok: true, value: null };
   const n = Number.parseInt(t, 10);
   if (Number.isNaN(n) || n < 0) return { ok: false };
+  return { ok: true, value: n };
+}
+
+function parseSignedInteger(raw: string): { ok: true; value: number } | { ok: false } {
+  const t = raw.trim();
+  if (t === '') return { ok: true, value: 0 };
+  const n = Number.parseInt(t, 10);
+  if (Number.isNaN(n)) return { ok: false };
   return { ok: true, value: n };
 }
 
@@ -57,8 +65,16 @@ export default function SettingsPage() {
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
   const [empVacQuotaEdit, setEmpVacQuotaEdit] = useState('');
   const [empHolQuotaEdit, setEmpHolQuotaEdit] = useState('');
+  const [empVacAdjustmentEdit, setEmpVacAdjustmentEdit] = useState('0');
+  const [empHolAdjustmentEdit, setEmpHolAdjustmentEdit] = useState('0');
+  const [empSickAdjustmentEdit, setEmpSickAdjustmentEdit] = useState('0');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
+  const [balancesByEmployee, setBalancesByEmployee] = useState<Record<string, BalanceResponse>>(
+    {},
+  );
+
+  const todayIso = new Date().toISOString().split('T')[0];
 
   // Local mirror of quotas so inputs aren't blocked by network round-trip
   const [vacationQuota, setVacationQuota] = useState<string>(String(config.vacationQuota));
@@ -69,8 +85,37 @@ export default function SettingsPage() {
     setHolidayQuota(String(config.holidayQuota));
   }, [config.vacationQuota, config.holidayQuota]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBalances = async () => {
+      if (employees.length === 0) {
+        setBalancesByEmployee({});
+        return;
+      }
+
+      try {
+        const entries = await Promise.all(
+          employees.map(async (employee) => [employee.id, await api.getBalance(employee.id)] as const),
+        );
+        if (!cancelled) {
+          setBalancesByEmployee(Object.fromEntries(entries));
+        }
+      } catch {
+        if (!cancelled) {
+          setBalancesByEmployee({});
+        }
+      }
+    };
+
+    void loadBalances();
+    return () => {
+      cancelled = true;
+    };
+  }, [employees]);
+
   const persistQuota = async (key: 'vacationQuota' | 'holidayQuota', raw: string) => {
-    const parsed = parseInt(raw, 10);
+    const parsed = Number.parseInt(raw, 10);
     if (Number.isNaN(parsed) || parsed < 0) return;
     if (parsed === config[key]) return;
     try {
@@ -100,7 +145,7 @@ export default function SettingsPage() {
         name: 'New Employee',
         departmentId: dept.id,
         manager: 'Manager Name',
-        startDate: new Date().toISOString().split('T')[0],
+        startDate: todayIso,
       });
     } catch (err) {
       alert(err instanceof ApiError ? err.message : 'Failed to add employee');
@@ -138,20 +183,39 @@ export default function SettingsPage() {
     setEditingEmp(emp);
     setEmpVacQuotaEdit(emp.vacationQuota === null ? '' : String(emp.vacationQuota));
     setEmpHolQuotaEdit(emp.holidayQuota === null ? '' : String(emp.holidayQuota));
+    setEmpVacAdjustmentEdit(String(emp.vacationAdjustment));
+    setEmpHolAdjustmentEdit(String(emp.holidayAdjustment));
+    setEmpSickAdjustmentEdit(String(emp.sickAdjustment));
   };
 
   const cancelEditEmployee = () => {
     setEditingEmp(null);
     setEmpVacQuotaEdit('');
     setEmpHolQuotaEdit('');
+    setEmpVacAdjustmentEdit('0');
+    setEmpHolAdjustmentEdit('0');
+    setEmpSickAdjustmentEdit('0');
   };
 
   const handleSaveEmployee = async () => {
     if (!editingEmp) return;
     const v = parseOptionalAnnualQuota(empVacQuotaEdit);
     const h = parseOptionalAnnualQuota(empHolQuotaEdit);
+    const vacAdj = parseSignedInteger(empVacAdjustmentEdit);
+    const holAdj = parseSignedInteger(empHolAdjustmentEdit);
+    const sickAdj = parseSignedInteger(empSickAdjustmentEdit);
+    const originalStartDate = employees.find((e) => e.id === editingEmp.id)?.startDate;
+    const startDateChanged = editingEmp.startDate !== originalStartDate;
+    if (startDateChanged && editingEmp.startDate > todayIso) {
+      alert('Contract start date cannot be in the future.');
+      return;
+    }
     if (!v.ok || !h.ok) {
       alert('Enter non-negative whole numbers for annual quotas, or leave blank to use global defaults.');
+      return;
+    }
+    if (!vacAdj.ok || !holAdj.ok || !sickAdj.ok) {
+      alert('Enter whole numbers for balance adjustments.');
       return;
     }
     try {
@@ -162,6 +226,9 @@ export default function SettingsPage() {
         startDate: editingEmp.startDate,
         vacationQuota: v.value,
         holidayQuota: h.value,
+        vacationAdjustment: vacAdj.value,
+        holidayAdjustment: holAdj.value,
+        sickAdjustment: sickAdj.value,
       });
       cancelEditEmployee();
     } catch (err) {
@@ -402,7 +469,9 @@ export default function SettingsPage() {
                     </button>
                   </div>
                 ) : (
-                  filteredEmployees.map((emp) => (
+                  filteredEmployees.map((emp) => {
+                  const balance = balancesByEmployee[emp.id];
+                  return (
                   <motion.div
                     key={emp.id}
                     layout
@@ -472,9 +541,10 @@ export default function SettingsPage() {
                             <input
                               type="date"
                               value={editingEmp.startDate}
-                              onChange={(e) =>
-                                setEditingEmp({ ...editingEmp, startDate: e.target.value })
-                              }
+                              max={todayIso}
+                              onChange={(e) => {
+                                setEditingEmp({ ...editingEmp, startDate: e.target.value });
+                              }}
                               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs"
                             />
                           </div>
@@ -511,6 +581,42 @@ export default function SettingsPage() {
                             <p className="text-[10px] text-slate-400 leading-tight">
                               Empty = global default ({config.holidayQuota} days)
                             </p>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-slate-400">
+                              Vacation adjustment
+                            </label>
+                            <input
+                              type="number"
+                              step={1}
+                              value={empVacAdjustmentEdit}
+                              onChange={(e) => setEmpVacAdjustmentEdit(e.target.value)}
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-slate-400">
+                              Holiday adjustment
+                            </label>
+                            <input
+                              type="number"
+                              step={1}
+                              value={empHolAdjustmentEdit}
+                              onChange={(e) => setEmpHolAdjustmentEdit(e.target.value)}
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-slate-400">
+                              Sick adjustment
+                            </label>
+                            <input
+                              type="number"
+                              step={1}
+                              value={empSickAdjustmentEdit}
+                              onChange={(e) => setEmpSickAdjustmentEdit(e.target.value)}
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
+                            />
                           </div>
                         </div>
                         <div className="flex gap-2 justify-end pt-2 border-t border-blue-100">
@@ -556,6 +662,11 @@ export default function SettingsPage() {
                                 </span>
                               )}
                             </p>
+                            <p className="text-[10px] text-slate-500 font-mono mt-1">
+                              Vac {balance ? `${balance.vacation.balanceToday.toFixed(1)}d` : '--'} avail · Hol{' '}
+                              {balance ? `${balance.holiday.balanceToday.toFixed(1)}d` : '--'} avail · Sick{' '}
+                              {balance ? `${balance.sick.used}d` : '--'} used
+                            </p>
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -575,7 +686,8 @@ export default function SettingsPage() {
                       </div>
                     )}
                   </motion.div>
-                  ))
+                  );
+                  })
                 )}
               </div>
             </div>

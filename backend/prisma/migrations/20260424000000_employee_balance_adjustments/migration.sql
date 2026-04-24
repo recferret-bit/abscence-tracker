@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "Employee"
+ADD COLUMN "vacationAdjustment" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "holidayAdjustment" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "sickAdjustment" INTEGER NOT NULL DEFAULT 0;

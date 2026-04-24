@@ -138,27 +138,56 @@ export class AbsencesService {
     const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
     const years = new Set(affectedDates.map((d) => d.getUTCFullYear()));
 
+    // Compute today's balance once — it doesn't change per year.
+    const result = computeBalance({
+      startDate: employee.startDate,
+      asOf: todayUtc,
+      absences: prospective as Absence[],
+      vacationQuota: vacQuota,
+      holidayQuota: holQuota,
+      carryoverDeadline: settings.carryoverDeadline,
+    });
+
     for (const Y of years) {
-      const datesInYear = affectedDates.filter((d) => d.getUTCFullYear() === Y);
-      const latestInYear = new Date(Math.max(...datesInYear.map((d) => d.getTime())));
-      const asOf = new Date(Math.max(todayUtc.getTime(), latestInYear.getTime()));
+      const futureVacation = this.countFutureWorkingDays(
+        prospective,
+        AbsenceType.VACATION,
+        Y,
+        todayUtc,
+      );
+      const futureHoliday = this.countFutureWorkingDays(
+        prospective,
+        AbsenceType.HOLIDAY,
+        Y,
+        todayUtc,
+      );
+      const effectiveVacationBalance =
+        result.vacation.balanceToday + employee.vacationAdjustment - futureVacation;
+      const effectiveHolidayBalance =
+        result.holiday.balanceToday + employee.holidayAdjustment - futureHoliday;
 
-      const result = computeBalance({
-        startDate: employee.startDate,
-        asOf,
-        absences: prospective as Absence[],
-        vacationQuota: vacQuota,
-        holidayQuota: holQuota,
-        carryoverDeadline: settings.carryoverDeadline,
-      });
-
-      if (result.vacation.balanceToday < 0) {
+      if (effectiveVacationBalance < 0) {
         throw new BadRequestException(`Vacation quota exceeded for ${Y}`);
       }
-      if (result.holiday.balanceToday < 0) {
+      if (effectiveHolidayBalance < 0) {
         throw new BadRequestException(`Holiday quota exceeded for ${Y}`);
       }
     }
+  }
+
+  private countFutureWorkingDays(
+    absences: Array<{ date: Date; type: AbsenceType }>,
+    type: AbsenceType,
+    year: number,
+    asOf: Date,
+  ): number {
+    return absences.filter((absence) => {
+      if (absence.type !== type) return false;
+      if (absence.date.getUTCFullYear() !== year) return false;
+      if (absence.date.getTime() <= asOf.getTime()) return false;
+      const day = absence.date.getUTCDay();
+      return day !== 0 && day !== 6;
+    }).length;
   }
 
   private parseDate(value: string): Date {

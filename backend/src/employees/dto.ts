@@ -56,4 +56,16 @@ export class UpdateEmployeeDto {
   @IsInt()
   @Min(0)
   holidayQuota?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  vacationAdjustment?: number;
+
+  @IsOptional()
+  @IsInt()
+  holidayAdjustment?: number;
+
+  @IsOptional()
+  @IsInt()
+  sickAdjustment?: number;
 }

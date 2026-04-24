@@ -205,7 +205,21 @@ export class BalanceService {
       carryoverDeadline: settings.carryoverDeadline,
     });
 
-    return { ...result, employmentStartDate: employee.startDate.toISOString().slice(0, 10) };
+    return {
+      ...result,
+      vacation: {
+        ...result.vacation,
+        balanceToday: round1(result.vacation.balanceToday + employee.vacationAdjustment),
+        balanceEoy: round1(result.vacation.balanceEoy + employee.vacationAdjustment),
+      },
+      holiday: {
+        ...result.holiday,
+        balanceToday: round1(result.holiday.balanceToday + employee.holidayAdjustment),
+        balanceEoy: round1(result.holiday.balanceEoy + employee.holidayAdjustment),
+      },
+      sick: { used: result.sick.used + employee.sickAdjustment },
+      employmentStartDate: employee.startDate.toISOString().slice(0, 10),
+    };
   }
 }
 

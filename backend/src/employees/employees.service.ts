@@ -17,6 +17,9 @@ export interface EmployeeDto {
   startDate: string;
   vacationQuota: number | null;
   holidayQuota: number | null;
+  vacationAdjustment: number;
+  holidayAdjustment: number;
+  sickAdjustment: number;
 }
 
 const include = { department: true } as const;
@@ -41,12 +44,14 @@ export class EmployeesService {
 
   async create(dto: CreateEmployeeDto): Promise<EmployeeDto> {
     await this.requireDepartment(dto.departmentId);
+    const startDate = this.parseDate(dto.startDate);
+    this.assertNotFutureStartDate(startDate);
     const e = await this.prisma.employee.create({
       data: {
         name: dto.name,
         departmentId: dto.departmentId,
         manager: dto.manager,
-        startDate: this.parseDate(dto.startDate),
+        startDate,
       },
       include,
     });
@@ -57,7 +62,17 @@ export class EmployeesService {
     const data: Prisma.EmployeeUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.manager !== undefined) data.manager = dto.manager;
-    if (dto.startDate !== undefined) data.startDate = this.parseDate(dto.startDate);
+    if (dto.startDate !== undefined) {
+      const newStart = this.parseDate(dto.startDate);
+      // Only reject future dates when the date is actually changing — employees
+      // that already have a future startDate must remain editable for other fields.
+      const existing = await this.prisma.employee.findUnique({ where: { id }, select: { startDate: true } });
+      const currentStartIso = existing?.startDate.toISOString().slice(0, 10);
+      if (dto.startDate !== currentStartIso) {
+        this.assertNotFutureStartDate(newStart);
+      }
+      data.startDate = newStart;
+    }
     if (dto.departmentId !== undefined) {
       await this.requireDepartment(dto.departmentId);
       data.department = { connect: { id: dto.departmentId } };
@@ -67,6 +82,15 @@ export class EmployeesService {
     }
     if (dto.holidayQuota !== undefined) {
       data.holidayQuota = dto.holidayQuota;
+    }
+    if (dto.vacationAdjustment !== undefined) {
+      data.vacationAdjustment = dto.vacationAdjustment;
+    }
+    if (dto.holidayAdjustment !== undefined) {
+      data.holidayAdjustment = dto.holidayAdjustment;
+    }
+    if (dto.sickAdjustment !== undefined) {
+      data.sickAdjustment = dto.sickAdjustment;
     }
     try {
       const e = await this.prisma.employee.update({ where: { id }, data, include });
@@ -104,6 +128,13 @@ export class EmployeesService {
     return d;
   }
 
+  private assertNotFutureStartDate(startDate: Date): void {
+    const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+    if (startDate.getTime() > todayUtc.getTime()) {
+      throw new BadRequestException('Contract start date cannot be in the future');
+    }
+  }
+
   private toDto(row: Employee & { department: { name: string } }): EmployeeDto {
     return {
       id: row.id,
@@ -114,6 +145,9 @@ export class EmployeesService {
       startDate: row.startDate.toISOString().slice(0, 10),
       vacationQuota: row.vacationQuota,
       holidayQuota: row.holidayQuota,
+      vacationAdjustment: row.vacationAdjustment,
+      holidayAdjustment: row.holidayAdjustment,
+      sickAdjustment: row.sickAdjustment,
     };
   }
 }

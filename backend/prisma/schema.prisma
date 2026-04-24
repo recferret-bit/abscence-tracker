@@ -56,6 +56,9 @@ model Employee {
   startDate       DateTime   @db.Date
   vacationQuota   Int? // null = use AppSettings.vacationQuota
   holidayQuota    Int? // null = use AppSettings.holidayQuota
+  vacationAdjustment Int @default(0)
+  holidayAdjustment  Int @default(0)
+  sickAdjustment     Int @default(0)
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   absences        Absence[]

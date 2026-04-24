@@ -178,30 +178,50 @@ export function assertQuotaWithinLimits(args: {
   vacationQuota: number;
   holidayQuota: number;
   carryoverDeadline: string;
+  vacationAdjustment?: number;
+  holidayAdjustment?: number;
 }): void {
-  const { startDate, absencesForEmployee, affectedDates, vacationQuota, holidayQuota, carryoverDeadline } =
-    args;
+  const {
+    startDate,
+    absencesForEmployee,
+    affectedDates,
+    vacationQuota,
+    holidayQuota,
+    carryoverDeadline,
+    vacationAdjustment = 0,
+    holidayAdjustment = 0,
+  } = args;
   const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
   const years = new Set(affectedDates.map((d) => d.getUTCFullYear()));
 
+  // Compute today's balance once — it doesn't change per year.
+  const result = computeBalance({
+    startDate,
+    asOf: todayUtc,
+    absences: absencesForEmployee,
+    vacationQuota,
+    holidayQuota,
+    carryoverDeadline,
+  });
+
   for (const Y of years) {
-    const datesInYear = affectedDates.filter((d) => d.getUTCFullYear() === Y);
-    const latestInYear = new Date(Math.max(...datesInYear.map((d) => d.getTime())));
-    const asOf = new Date(Math.max(todayUtc.getTime(), latestInYear.getTime()));
+    const futureVacation = absencesForEmployee.filter((absence) => {
+      if (absence.type !== 'VACATION') return false;
+      if (absence.date.getUTCFullYear() !== Y) return false;
+      if (absence.date.getTime() <= todayUtc.getTime()) return false;
+      return !isWeekend(absence.date);
+    }).length;
+    const futureHoliday = absencesForEmployee.filter((absence) => {
+      if (absence.type !== 'HOLIDAY') return false;
+      if (absence.date.getUTCFullYear() !== Y) return false;
+      if (absence.date.getTime() <= todayUtc.getTime()) return false;
+      return !isWeekend(absence.date);
+    }).length;
 
-    const result = computeBalance({
-      startDate,
-      asOf,
-      absences: absencesForEmployee,
-      vacationQuota,
-      holidayQuota,
-      carryoverDeadline,
-    });
-
-    if (result.vacation.balanceToday < 0) {
+    if (result.vacation.balanceToday + vacationAdjustment - futureVacation < 0) {
       throw new Error(`Vacation quota exceeded for ${Y}`);
     }
-    if (result.holiday.balanceToday < 0) {
+    if (result.holiday.balanceToday + holidayAdjustment - futureHoliday < 0) {
       throw new Error(`Holiday quota exceeded for ${Y}`);
     }
   }

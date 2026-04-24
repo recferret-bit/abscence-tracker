@@ -19,6 +19,9 @@ export interface Employee {
   vacationQuota: number | null;
   /** null = use global AppSettings holiday quota */
   holidayQuota: number | null;
+  vacationAdjustment: number;
+  holidayAdjustment: number;
+  sickAdjustment: number;
 }
 
 export interface Department {
