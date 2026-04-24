@@ -287,7 +287,6 @@ export default function DashboardPage() {
                 <h1 className="font-bold text-sm tracking-tight text-slate-900 leading-tight">
                   Absence Tracker
                 </h1>
-                <p className="text-[10px] font-mono text-slate-500">VER 1.0.4</p>
               </div>
             </div>
 
@@ -366,9 +365,6 @@ export default function DashboardPage() {
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">
                 Consolidated Schedule
               </h2>
-              <p className="text-xs text-slate-500 font-mono mt-0.5 uppercase tracking-wide">
-                FIN-{format(today, 'yyyy')}-ABS-1.0
-              </p>
             </div>
 
             <div className="flex flex-col pl-6">
