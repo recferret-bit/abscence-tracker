@@ -35,10 +35,10 @@ function parseOptionalAnnualQuota(
   return { ok: true, value: n };
 }
 
-function parseSignedInteger(raw: string): { ok: true; value: number } | { ok: false } {
+function parseBalanceInput(raw: string): { ok: true; value: number } | { ok: false } {
   const t = raw.trim();
   if (t === '') return { ok: true, value: 0 };
-  const n = Number.parseInt(t, 10);
+  const n = Number.parseFloat(t);
   if (Number.isNaN(n)) return { ok: false };
   return { ok: true, value: n };
 }
@@ -51,9 +51,11 @@ export default function SettingsPage() {
     employees,
     departments,
     config,
+    absences,
     createEmployee,
     updateEmployee,
     deleteEmployee,
+    deleteAbsence,
     createDepartment,
     deleteDepartment,
     updateConfig,
@@ -65,9 +67,8 @@ export default function SettingsPage() {
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
   const [empVacQuotaEdit, setEmpVacQuotaEdit] = useState('');
   const [empHolQuotaEdit, setEmpHolQuotaEdit] = useState('');
-  const [empVacAdjustmentEdit, setEmpVacAdjustmentEdit] = useState('0');
-  const [empHolAdjustmentEdit, setEmpHolAdjustmentEdit] = useState('0');
-  const [empSickAdjustmentEdit, setEmpSickAdjustmentEdit] = useState('0');
+  const [empVacBalanceEdit, setEmpVacBalanceEdit] = useState('0');
+  const [empHolBalanceEdit, setEmpHolBalanceEdit] = useState('0');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
   const [balancesByEmployee, setBalancesByEmployee] = useState<Record<string, BalanceResponse>>(
@@ -180,30 +181,28 @@ export default function SettingsPage() {
   };
 
   const beginEditEmployee = (emp: Employee) => {
+    const balance = balancesByEmployee[emp.id];
     setEditingEmp(emp);
     setEmpVacQuotaEdit(emp.vacationQuota === null ? '' : String(emp.vacationQuota));
     setEmpHolQuotaEdit(emp.holidayQuota === null ? '' : String(emp.holidayQuota));
-    setEmpVacAdjustmentEdit(String(emp.vacationAdjustment));
-    setEmpHolAdjustmentEdit(String(emp.holidayAdjustment));
-    setEmpSickAdjustmentEdit(String(emp.sickAdjustment));
+    setEmpVacBalanceEdit(String(balance?.vacation.balanceToday ?? 0));
+    setEmpHolBalanceEdit(String(balance?.holiday.balanceToday ?? 0));
   };
 
   const cancelEditEmployee = () => {
     setEditingEmp(null);
     setEmpVacQuotaEdit('');
     setEmpHolQuotaEdit('');
-    setEmpVacAdjustmentEdit('0');
-    setEmpHolAdjustmentEdit('0');
-    setEmpSickAdjustmentEdit('0');
+    setEmpVacBalanceEdit('0');
+    setEmpHolBalanceEdit('0');
   };
 
   const handleSaveEmployee = async () => {
     if (!editingEmp) return;
     const v = parseOptionalAnnualQuota(empVacQuotaEdit);
     const h = parseOptionalAnnualQuota(empHolQuotaEdit);
-    const vacAdj = parseSignedInteger(empVacAdjustmentEdit);
-    const holAdj = parseSignedInteger(empHolAdjustmentEdit);
-    const sickAdj = parseSignedInteger(empSickAdjustmentEdit);
+    const vacBalance = parseBalanceInput(empVacBalanceEdit);
+    const holBalance = parseBalanceInput(empHolBalanceEdit);
     const originalStartDate = employees.find((e) => e.id === editingEmp.id)?.startDate;
     const startDateChanged = editingEmp.startDate !== originalStartDate;
     if (startDateChanged && editingEmp.startDate > todayIso) {
@@ -214,11 +213,54 @@ export default function SettingsPage() {
       alert('Enter non-negative whole numbers for annual quotas, or leave blank to use global defaults.');
       return;
     }
-    if (!vacAdj.ok || !holAdj.ok || !sickAdj.ok) {
-      alert('Enter whole numbers for balance adjustments.');
+    if (!vacBalance.ok || !holBalance.ok) {
+      alert('Enter numeric values for balances.');
       return;
     }
     try {
+      const currentBalance = balancesByEmployee[editingEmp.id];
+      const currentEffVac = currentBalance?.vacation.balanceToday ?? 0;
+      const currentEffHol = currentBalance?.holiday.balanceToday ?? 0;
+      const baseVac = currentEffVac - editingEmp.vacationAdjustment;
+      const baseHol = currentEffHol - editingEmp.holidayAdjustment;
+      let nextVacAdjustment = vacBalance.value - baseVac;
+      let nextHolAdjustment = holBalance.value - baseHol;
+
+      if (vacBalance.value < currentEffVac) {
+        const lastVacation = [...absences]
+          .filter((a) => a.employeeId === editingEmp.id && a.type === 'VACATION')
+          .sort((a, b) => b.date.localeCompare(a.date))[0];
+        if (lastVacation) {
+          await deleteAbsence(lastVacation.id);
+          nextVacAdjustment = vacBalance.value - (baseVac + 1);
+          // Optimistically reflect the deletion so that if updateEmployee fails and
+          // the user retries, the comparison won't trigger a second deletion.
+          setEditingEmp((prev) => (prev ? { ...prev, vacationAdjustment: nextVacAdjustment } : prev));
+          setBalancesByEmployee((prev) => {
+            const b = prev[editingEmp.id];
+            if (!b) return prev;
+            return { ...prev, [editingEmp.id]: { ...b, vacation: { ...b.vacation, balanceToday: vacBalance.value } } };
+          });
+        }
+      }
+
+      if (holBalance.value < currentEffHol) {
+        const lastHoliday = [...absences]
+          .filter((a) => a.employeeId === editingEmp.id && a.type === 'HOLIDAY')
+          .sort((a, b) => b.date.localeCompare(a.date))[0];
+        if (lastHoliday) {
+          await deleteAbsence(lastHoliday.id);
+          nextHolAdjustment = holBalance.value - (baseHol + 1);
+          // Same idempotency protection for holiday.
+          setEditingEmp((prev) => (prev ? { ...prev, holidayAdjustment: nextHolAdjustment } : prev));
+          setBalancesByEmployee((prev) => {
+            const b = prev[editingEmp.id];
+            if (!b) return prev;
+            return { ...prev, [editingEmp.id]: { ...b, holiday: { ...b.holiday, balanceToday: holBalance.value } } };
+          });
+        }
+      }
+
       await updateEmployee(editingEmp.id, {
         name: editingEmp.name,
         departmentId: editingEmp.departmentId,
@@ -226,9 +268,8 @@ export default function SettingsPage() {
         startDate: editingEmp.startDate,
         vacationQuota: v.value,
         holidayQuota: h.value,
-        vacationAdjustment: vacAdj.value,
-        holidayAdjustment: holAdj.value,
-        sickAdjustment: sickAdj.value,
+        vacationAdjustment: nextVacAdjustment,
+        holidayAdjustment: nextHolAdjustment,
       });
       cancelEditEmployee();
     } catch (err) {
@@ -584,39 +625,33 @@ export default function SettingsPage() {
                           </div>
                           <div className="space-y-1">
                             <label className="text-[9px] uppercase font-bold text-slate-400">
-                              Vacation adjustment
+                              Vacation balance
                             </label>
                             <input
                               type="number"
-                              step={1}
-                              value={empVacAdjustmentEdit}
-                              onChange={(e) => setEmpVacAdjustmentEdit(e.target.value)}
+                              step={0.5}
+                              value={empVacBalanceEdit}
+                              onChange={(e) => setEmpVacBalanceEdit(e.target.value)}
                               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
                             />
+                            <p className="text-[10px] text-slate-400 leading-tight">
+                              Current available days. Reducing removes the latest calendar mark.
+                            </p>
                           </div>
                           <div className="space-y-1">
                             <label className="text-[9px] uppercase font-bold text-slate-400">
-                              Holiday adjustment
+                              Holiday balance
                             </label>
                             <input
                               type="number"
-                              step={1}
-                              value={empHolAdjustmentEdit}
-                              onChange={(e) => setEmpHolAdjustmentEdit(e.target.value)}
+                              step={0.5}
+                              value={empHolBalanceEdit}
+                              onChange={(e) => setEmpHolBalanceEdit(e.target.value)}
                               className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
                             />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[9px] uppercase font-bold text-slate-400">
-                              Sick adjustment
-                            </label>
-                            <input
-                              type="number"
-                              step={1}
-                              value={empSickAdjustmentEdit}
-                              onChange={(e) => setEmpSickAdjustmentEdit(e.target.value)}
-                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500/20"
-                            />
+                            <p className="text-[10px] text-slate-400 leading-tight">
+                              Current available days. Reducing removes the latest calendar mark.
+                            </p>
                           </div>
                         </div>
                         <div className="flex gap-2 justify-end pt-2 border-t border-blue-100">

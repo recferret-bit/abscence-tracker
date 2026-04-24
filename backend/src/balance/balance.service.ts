@@ -217,7 +217,6 @@ export class BalanceService {
         balanceToday: round1(result.holiday.balanceToday + employee.holidayAdjustment),
         balanceEoy: round1(result.holiday.balanceEoy + employee.holidayAdjustment),
       },
-      sick: { used: result.sick.used + employee.sickAdjustment },
       employmentStartDate: employee.startDate.toISOString().slice(0, 10),
     };
   }

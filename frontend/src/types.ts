@@ -21,7 +21,6 @@ export interface Employee {
   holidayQuota: number | null;
   vacationAdjustment: number;
   holidayAdjustment: number;
-  sickAdjustment: number;
 }
 
 export interface Department {

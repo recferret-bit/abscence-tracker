@@ -1,6 +1,7 @@
 import {
   IsDateString,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Min,
@@ -58,14 +59,10 @@ export class UpdateEmployeeDto {
   holidayQuota?: number | null;
 
   @IsOptional()
-  @IsInt()
+  @IsNumber()
   vacationAdjustment?: number;
 
   @IsOptional()
-  @IsInt()
+  @IsNumber()
   holidayAdjustment?: number;
-
-  @IsOptional()
-  @IsInt()
-  sickAdjustment?: number;
 }

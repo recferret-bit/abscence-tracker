@@ -19,7 +19,6 @@ export interface EmployeeDto {
   holidayQuota: number | null;
   vacationAdjustment: number;
   holidayAdjustment: number;
-  sickAdjustment: number;
 }
 
 const include = { department: true } as const;
@@ -89,9 +88,6 @@ export class EmployeesService {
     if (dto.holidayAdjustment !== undefined) {
       data.holidayAdjustment = dto.holidayAdjustment;
     }
-    if (dto.sickAdjustment !== undefined) {
-      data.sickAdjustment = dto.sickAdjustment;
-    }
     try {
       const e = await this.prisma.employee.update({ where: { id }, data, include });
       return this.toDto(e);
@@ -147,7 +143,6 @@ export class EmployeesService {
       holidayQuota: row.holidayQuota,
       vacationAdjustment: row.vacationAdjustment,
       holidayAdjustment: row.holidayAdjustment,
-      sickAdjustment: row.sickAdjustment,
     };
   }
 }

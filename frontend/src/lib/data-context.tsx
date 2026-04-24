@@ -37,7 +37,6 @@ interface DataContextValue extends DataState {
       | 'holidayQuota'
       | 'vacationAdjustment'
       | 'holidayAdjustment'
-      | 'sickAdjustment'
     >,
   ) => Promise<void>;
   updateEmployee: (id: string, patch: Partial<Employee> & { departmentId?: string }) => Promise<void>;
