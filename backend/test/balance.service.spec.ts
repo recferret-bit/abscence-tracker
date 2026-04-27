@@ -56,9 +56,66 @@ describe('computeBalance', () => {
     expect(result.holiday.balanceEoy).toBe(7.1);
   });
 
+  it('carries unused vacation from a 2025 contract start into 2026', () => {
+    const result = computeBalance({
+      startDate: utc('2025-07-15'),
+      asOf: utc('2026-04-15'),
+      absences: [],
+      ...SETTINGS,
+    });
+
+    expect(result.vacation.carryIn).toBe(8.3);
+    expect(result.vacation.carryInForfeited).toBe(0);
+    expect(result.vacation.accruedYTD).toBe(6.7);
+    expect(result.vacation.used).toBe(0);
+    expect(result.vacation.balanceToday).toBe(15);
+  });
+
+  it('uses transferred 2025 vacation before 2026 accrual', () => {
+    const result = computeBalance({
+      startDate: utc('2025-07-15'),
+      asOf: utc('2027-04-15'),
+      absences: [
+        absence('2026-04-01', AbsenceType.VACATION),
+        absence('2026-04-02', AbsenceType.VACATION),
+        absence('2026-04-03', AbsenceType.VACATION),
+        absence('2026-04-06', AbsenceType.VACATION),
+        absence('2026-04-07', AbsenceType.VACATION),
+      ],
+      ...SETTINGS,
+    });
+
+    expect(result.vacation.carryIn).toBe(20);
+    expect(result.vacation.carryInForfeited).toBe(0);
+    expect(result.vacation.accruedYTD).toBe(6.7);
+    expect(result.vacation.used).toBe(0);
+    expect(result.vacation.balanceToday).toBe(26.7);
+  });
+
+  it('forfeits only unused transferred vacation after June 30', () => {
+    const result = computeBalance({
+      startDate: utc('2025-07-15'),
+      asOf: utc('2026-07-15'),
+      absences: [
+        absence('2026-04-01', AbsenceType.VACATION),
+        absence('2026-04-02', AbsenceType.VACATION),
+        absence('2026-04-03', AbsenceType.VACATION),
+        absence('2026-04-06', AbsenceType.VACATION),
+        absence('2026-04-07', AbsenceType.VACATION),
+      ],
+      ...SETTINGS,
+    });
+
+    expect(result.vacation.carryIn).toBe(5);
+    expect(result.vacation.carryInForfeited).toBe(3.3);
+    expect(result.vacation.accruedYTD).toBe(11.7);
+    expect(result.vacation.used).toBe(5);
+    expect(result.vacation.balanceToday).toBe(11.7);
+  });
+
   it('vacation carryover survives if used before June 30', () => {
     const result = computeBalance({
-      startDate: utc('2024-01-01'),
+      startDate: utc('2025-01-01'),
       asOf: utc('2026-06-15'),
       absences: [
         // 2025: accrued 20, used 17 → carry 3 into 2026
@@ -84,7 +141,7 @@ describe('computeBalance', () => {
 
   it('vacation carryover is partially forfeited after June 30', () => {
     const result = computeBalance({
-      startDate: utc('2024-01-01'),
+      startDate: utc('2025-01-01'),
       asOf: utc('2026-07-15'),
       absences: [
         // 2025: accrued 20, used 17 → carry 3 into 2026

@@ -15,10 +15,14 @@ const sameOrBefore = (a: Date, b: Date): boolean => a.getTime() <= b.getTime();
 const utcDate = (year: number, monthIdx: number, day: number): Date =>
   new Date(Date.UTC(year, monthIdx, day));
 
-const startOfYear = (year: number): Date => utcDate(year, 0, 1);
 const endOfYear = (year: number): Date => utcDate(year, 11, 31);
 const startOfMonth = (year: number, monthIdx: number): Date =>
   utcDate(year, monthIdx, 1);
+
+const carryoverDeadlineDate = (year: number, carryoverDeadline: string): Date => {
+  const [mmStr, ddStr] = carryoverDeadline.split('-');
+  return utcDate(year, Number.parseInt(mmStr, 10) - 1, Number.parseInt(ddStr, 10));
+};
 
 /**
  * Number of full calendar months the employee was already employed for, between
@@ -63,6 +67,44 @@ function workingDayAbsences(
   }).length;
 }
 
+function vacationAccruedForYear(
+  startDate: Date,
+  year: number,
+  vacationQuota: number,
+): number {
+  return monthsWorkedInYear(startDate, year, endOfYear(year)) * (vacationQuota / 12);
+}
+
+function vacationCarryIntoYear(
+  startDate: Date,
+  targetYear: number,
+  absences: Absence[],
+  vacationQuota: number,
+  carryoverDeadline: string,
+): number {
+  const startYear = startDate.getUTCFullYear();
+  let carry = 0;
+
+  for (let y = startYear; y < targetYear; y++) {
+    const accruedY = vacationAccruedForYear(startDate, y, vacationQuota);
+    const deadline = carryoverDeadlineDate(y, carryoverDeadline);
+    const usedBeforeDeadline = workingDayAbsences(
+      absences,
+      y,
+      AbsenceType.VACATION,
+      deadline,
+    );
+    const usedTotal = workingDayAbsences(absences, y, AbsenceType.VACATION);
+    const usedFromCarry = Math.min(carry, usedBeforeDeadline);
+    const usedFromCurrentAccrual =
+      usedBeforeDeadline - usedFromCarry + (usedTotal - usedBeforeDeadline);
+
+    carry = Math.max(0, accruedY - usedFromCurrentAccrual);
+  }
+
+  return carry;
+}
+
 export interface BalanceBlock {
   quota: number;
   accruedYTD: number;
@@ -98,21 +140,19 @@ interface ComputeArgs {
  */
 export function computeBalance(args: ComputeArgs): Omit<BalanceResponse, 'employmentStartDate'> {
   const { startDate, asOf, absences, vacationQuota, holidayQuota, carryoverDeadline } = args;
-  const startYear = startDate.getUTCFullYear();
   const currentYear = asOf.getUTCFullYear();
 
   // 1. Walk previous years to compute the vacation carry-in into currentYear.
-  let vacCarry = 0;
-  for (let y = startYear; y < currentYear; y++) {
-    const accruedY =
-      monthsWorkedInYear(startDate, y, endOfYear(y)) * (vacationQuota / 12);
-    const usedY = workingDayAbsences(absences, y, AbsenceType.VACATION);
-    vacCarry = Math.max(0, accruedY - usedY);
-  }
+  const vacCarry = vacationCarryIntoYear(
+    startDate,
+    currentYear,
+    absences,
+    vacationQuota,
+    carryoverDeadline,
+  );
 
   // 2. Carry deadline & forfeit logic for currentYear.
-  const [mmStr, ddStr] = carryoverDeadline.split('-');
-  const deadline = utcDate(currentYear, parseInt(mmStr, 10) - 1, parseInt(ddStr, 10));
+  const deadline = carryoverDeadlineDate(currentYear, carryoverDeadline);
   const pastDeadline = asOf.getTime() > deadline.getTime();
 
   const usedVacBeforeDeadline = workingDayAbsences(
@@ -192,9 +232,8 @@ export class BalanceService {
       orderBy: { date: 'asc' },
     });
 
-    const asOf = asOfStr
-      ? new Date(asOfStr + (asOfStr.includes('T') ? '' : 'T00:00:00.000Z'))
-      : new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
+    const asOfInput = asOfStr ?? new Date().toISOString().slice(0, 10);
+    const asOf = new Date(asOfInput + (asOfInput.includes('T') ? '' : 'T00:00:00.000Z'));
 
     const result = computeBalance({
       startDate: employee.startDate,

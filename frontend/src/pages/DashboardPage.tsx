@@ -137,7 +137,6 @@ export default function DashboardPage() {
     if (!selectedEmployee) return null;
     const asOf = new Date(`${todayStr}T00:00:00.000Z`);
     const startDate = new Date(`${selectedEmployee.startDate}T00:00:00.000Z`);
-    const currentYear = asOf.getUTCFullYear();
 
     const forEmployee = absences
       .filter((a) => a.employeeId === selectedEmployee.id)
@@ -147,7 +146,7 @@ export default function DashboardPage() {
       }));
 
     // Use today as asOf so carry-in / deadline logic is correct.
-    const computed = computeBalance({
+    return computeBalance({
       startDate,
       asOf,
       absences: forEmployee,
@@ -155,34 +154,6 @@ export default function DashboardPage() {
       holidayQuota: selectedEmployee.holidayQuota ?? config.holidayQuota,
       carryoverDeadline: config.carryoverDeadline,
     });
-
-    // Count ALL working-day absences in the current year — past AND future —
-    // so the card reflects planned absences the moment a cell is clicked.
-    const isUtcWeekend = (d: Date) => { const day = d.getUTCDay(); return day === 0 || day === 6; };
-    const countYear = (type: AbsenceType) =>
-      forEmployee.filter(
-        (a) => a.type === type && a.date.getUTCFullYear() === currentYear && !isUtcWeekend(a.date),
-      ).length;
-
-    const round1 = (n: number) => Math.round(n * 10) / 10;
-    const vacUsed = countYear('VACATION');
-    const holUsed = countYear('HOLIDAY');
-    const sickUsed = countYear('SICK');
-
-    return {
-      ...computed,
-      vacation: {
-        ...computed.vacation,
-        used: vacUsed,
-        balanceToday: round1(computed.vacation.accruedYTD + computed.vacation.carryIn - vacUsed),
-      },
-      holiday: {
-        ...computed.holiday,
-        used: holUsed,
-        balanceToday: round1(computed.holiday.accruedYTD - holUsed),
-      },
-      sick: { used: sickUsed },
-    };
   }, [selectedEmployee, absences, config, todayStr]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
