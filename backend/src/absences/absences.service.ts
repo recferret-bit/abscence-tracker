@@ -149,26 +149,15 @@ export class AbsencesService {
     });
 
     for (const Y of years) {
-      const futureVacation = this.countFutureWorkingDays(
-        prospective,
-        AbsenceType.VACATION,
-        Y,
-        todayUtc,
-      );
       const futureHoliday = this.countFutureWorkingDays(
         prospective,
         AbsenceType.HOLIDAY,
         Y,
         todayUtc,
       );
-      const effectiveVacationBalance =
-        result.vacation.balanceToday + employee.vacationAdjustment - futureVacation;
       const effectiveHolidayBalance =
         result.holiday.balanceToday + employee.holidayAdjustment - futureHoliday;
 
-      if (effectiveVacationBalance < 0) {
-        throw new BadRequestException(`Vacation quota exceeded for ${Y}`);
-      }
       if (effectiveHolidayBalance < 0) {
         throw new BadRequestException(`Holiday quota exceeded for ${Y}`);
       }

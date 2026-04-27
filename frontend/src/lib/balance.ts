@@ -188,7 +188,6 @@ export function assertQuotaWithinLimits(args: {
     vacationQuota,
     holidayQuota,
     carryoverDeadline,
-    vacationAdjustment = 0,
     holidayAdjustment = 0,
   } = args;
   const todayUtc = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z');
@@ -205,12 +204,6 @@ export function assertQuotaWithinLimits(args: {
   });
 
   for (const Y of years) {
-    const futureVacation = absencesForEmployee.filter((absence) => {
-      if (absence.type !== 'VACATION') return false;
-      if (absence.date.getUTCFullYear() !== Y) return false;
-      if (absence.date.getTime() <= todayUtc.getTime()) return false;
-      return !isWeekend(absence.date);
-    }).length;
     const futureHoliday = absencesForEmployee.filter((absence) => {
       if (absence.type !== 'HOLIDAY') return false;
       if (absence.date.getUTCFullYear() !== Y) return false;
@@ -218,9 +211,6 @@ export function assertQuotaWithinLimits(args: {
       return !isWeekend(absence.date);
     }).length;
 
-    if (result.vacation.balanceToday + vacationAdjustment - futureVacation < 0) {
-      throw new Error(`Vacation quota exceeded for ${Y}`);
-    }
     if (result.holiday.balanceToday + holidayAdjustment - futureHoliday < 0) {
       throw new Error(`Holiday quota exceeded for ${Y}`);
     }
