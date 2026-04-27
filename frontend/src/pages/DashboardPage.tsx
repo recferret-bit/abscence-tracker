@@ -30,7 +30,7 @@ import { CATEGORY_COLORS } from '../constants';
 import { downloadCsv, toCsv } from '../lib/csv-export';
 import { useData } from '../lib/data-context';
 import { useAuth } from '../lib/auth-context';
-import { computeBalance } from '../lib/balance';
+import { computeBalance, computeVacationBalanceSplit } from '../lib/balance';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -133,7 +133,7 @@ export default function DashboardPage() {
     [employees, selectedEmployeeId],
   );
 
-  const balance = useMemo(() => {
+  const selectedEmployeeBalance = useMemo(() => {
     if (!selectedEmployee) return null;
     const asOf = new Date(`${todayStr}T00:00:00.000Z`);
     const startDate = new Date(`${selectedEmployee.startDate}T00:00:00.000Z`);
@@ -146,15 +146,23 @@ export default function DashboardPage() {
       }));
 
     // Use today as asOf so carry-in / deadline logic is correct.
-    return computeBalance({
+    const balanceArgs = {
       startDate,
       asOf,
       absences: forEmployee,
       vacationQuota: selectedEmployee.vacationQuota ?? config.vacationQuota,
       holidayQuota: selectedEmployee.holidayQuota ?? config.holidayQuota,
       carryoverDeadline: config.carryoverDeadline,
-    });
+    };
+
+    return {
+      balance: computeBalance(balanceArgs),
+      vacationSplit: computeVacationBalanceSplit(balanceArgs),
+    };
   }, [selectedEmployee, absences, config, todayStr]);
+
+  const balance = selectedEmployeeBalance?.balance ?? null;
+  const vacationSplit = selectedEmployeeBalance?.vacationSplit ?? null;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousYearRef = useRef<number>(selectedYear);
@@ -631,7 +639,7 @@ export default function DashboardPage() {
         </div>
 
         <AnimatePresence>
-          {selectedEmployee && balance && (
+          {selectedEmployee && balance && vacationSplit && (
             <motion.div
               initial={{ y: 200, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -673,12 +681,34 @@ export default function DashboardPage() {
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
                   Vacation Balance
                 </div>
-                <div className="flex justify-between items-end">
-                  <div className="text-3xl font-mono font-bold text-green-600">
-                    {balance.vacation.balanceToday}
-                    <span className="text-sm font-normal text-slate-400 ml-1">
-                      / {balance.vacation.accruedYear}
-                    </span>
+                <div className="flex justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-3xl font-mono font-bold text-green-600">
+                      {vacationSplit.totalAvailable}
+                    </div>
+                    <div className="text-[9px] text-slate-400 uppercase font-bold tracking-tight leading-none">
+                      Total available
+                    </div>
+                    <div className="mt-3 space-y-1 text-[10px] font-mono text-slate-500">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold uppercase tracking-tight text-slate-400">
+                          Current year
+                        </span>
+                        <span className="font-bold text-slate-700">
+                          {vacationSplit.currentYearAvailable} / {vacationSplit.currentYearMax} d
+                        </span>
+                      </div>
+                      {vacationSplit.showPreviousYear && (
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold uppercase tracking-tight text-slate-400">
+                            Previous year
+                          </span>
+                          <span className="font-bold text-slate-700">
+                            {vacationSplit.previousYearAvailable} / {vacationSplit.previousYearMax} d
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="text-right">
                     <div className="text-[9px] text-slate-400 uppercase font-bold tracking-tight leading-none mb-1">

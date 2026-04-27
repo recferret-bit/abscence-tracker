@@ -125,6 +125,15 @@ export interface ComputeBalanceResult {
   sick: { used: number };
 }
 
+export interface VacationBalanceSplit {
+  totalAvailable: number;
+  currentYearAvailable: number;
+  currentYearMax: number;
+  previousYearAvailable: number;
+  previousYearMax: number;
+  showPreviousYear: boolean;
+}
+
 interface ComputeArgs {
   startDate: Date;
   asOf: Date;
@@ -205,6 +214,42 @@ export function computeBalance(args: ComputeArgs): ComputeBalanceResult {
       balanceEoy: round1(holAccruedYear - holUsed),
     },
     sick: { used: sickUsed },
+  };
+}
+
+export function computeVacationBalanceSplit(args: ComputeArgs): VacationBalanceSplit {
+  const { startDate, asOf, absences, vacationQuota, carryoverDeadline } = args;
+  const result = computeBalance(args);
+  const currentYear = asOf.getUTCFullYear();
+  const rawCarry = vacationCarryIntoYear(
+    startDate,
+    currentYear,
+    absences,
+    vacationQuota,
+    carryoverDeadline,
+  );
+  const deadline = carryoverDeadlineDate(currentYear, carryoverDeadline);
+  const pastDeadline = asOf.getTime() > deadline.getTime();
+  const usedVacBeforeDeadline = workingDayAbsences(
+    absences,
+    currentYear,
+    'VACATION',
+    asOf.getTime() < deadline.getTime() ? asOf : deadline,
+  );
+
+  const previousYearMax = round1(rawCarry);
+  const previousYearAvailable = pastDeadline
+    ? 0
+    : round1(Math.max(0, rawCarry - usedVacBeforeDeadline));
+  const totalAvailable = result.vacation.balanceToday;
+
+  return {
+    totalAvailable,
+    currentYearAvailable: round1(Math.max(0, totalAvailable - previousYearAvailable)),
+    currentYearMax: result.vacation.accruedYear,
+    previousYearAvailable,
+    previousYearMax,
+    showPreviousYear: previousYearMax >= 1,
   };
 }
 
