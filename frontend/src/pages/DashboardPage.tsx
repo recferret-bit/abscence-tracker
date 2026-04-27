@@ -699,12 +699,12 @@ export default function DashboardPage() {
                         </span>
                       </div>
                       {vacationSplit.showPreviousYear && (
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold uppercase tracking-tight text-slate-400">
+                        <div className="flex items-center gap-2 whitespace-nowrap">
+                          <span className="font-bold uppercase tracking-tight text-slate-400 shrink-0">
                             Previous year
                           </span>
-                          <span className="font-bold text-slate-700">
-                            {vacationSplit.previousYearAvailable} / {vacationSplit.previousYearMax} d
+                          <span className="font-bold text-slate-700 shrink-0">
+                            {Math.floor(vacationSplit.previousYearAvailable)} / {Math.floor(vacationSplit.previousYearMax)} d
                           </span>
                         </div>
                       )}
@@ -717,13 +717,6 @@ export default function DashboardPage() {
                     <div className="text-xs font-mono font-bold text-slate-700">
                       {balance.vacation.used}.0 d
                     </div>
-                    {balance.vacation.carryIn > 0 && (
-                      <div className="text-[9px] text-slate-400 mt-1">
-                        Carry in {balance.vacation.carryIn}d
-                        {balance.vacation.carryInForfeited > 0 &&
-                          ` (forfeited ${balance.vacation.carryInForfeited}d)`}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
